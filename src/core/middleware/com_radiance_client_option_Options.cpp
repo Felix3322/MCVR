@@ -146,6 +146,12 @@ extern "C" JNIEXPORT void JNICALL Java_com_radiance_client_option_Options_native
     applyReflexSettings();
 }
 
+extern "C" JNIEXPORT void JNICALL Java_com_radiance_client_option_Options_nativeSetOutputScale2x(
+    JNIEnv *, jclass, jboolean enabled, jboolean write) {
+    Renderer::options.outputScale2x = enabled;
+    if (write) Renderer::options.needRecreate = true;
+}
+
 extern "C" JNIEXPORT jboolean JNICALL Java_com_radiance_client_option_Options_nativeIsReflexSupported(
     JNIEnv *, jclass) {
     return StreamlineContext::isReflexAvailable() ? JNI_TRUE : JNI_FALSE;

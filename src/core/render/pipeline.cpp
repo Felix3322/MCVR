@@ -80,6 +80,7 @@ void WorldPipeline::init(std::shared_ptr<Framework> framework, std::shared_ptr<P
     contexts_.resize(frameNum);
     VkExtent2D extent = framework->swapchain()->vkExtent();
 
+
     for (int frameIndex = 0; frameIndex < frameNum; frameIndex++) {
         sharedImages_[frameIndex][0] = vk::DeviceLocalImage::create(
             framework->device(), framework->vma(), false, extent.width, extent.height, 1, blueprint->imageFormats_[0],
