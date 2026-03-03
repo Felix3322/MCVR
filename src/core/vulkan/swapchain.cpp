@@ -6,6 +6,7 @@
 #include "core/vulkan/window.hpp"
 
 #include "core/render/renderer.hpp"
+#include "core/render/streamline_context.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -115,11 +116,29 @@ VkPresentModeKHR choosePresentMode(const std::vector<VkPresentModeKHR> presentMo
                         << std::endl;
         return VK_PRESENT_MODE_FIFO_KHR;
     }
-    if (Renderer::options.vsync) { return VK_PRESENT_MODE_FIFO_KHR; }
+    if (Renderer::options.vsync) {
+        // When Streamline Reflex is available, prefer MAILBOX over FIFO.
+        // FIFO blocks the CPU thread at vkQueuePresentKHR until vblank, which:
+        //   1. Prevents slReflexSleep from controlling frame pacing
+        //   2. Adds unavoidable latency that Reflex can't compensate for
+        //   3. Defeats GSYNC's variable refresh rate (display always waits for vblank)
+        // MAILBOX doesn't block at present (still no tearing — display flips at vblank)
+        // so Reflex can pace frames via sleep and GSYNC can adapt the refresh rate.
+        if (StreamlineContext::isReflexAvailable()) {
+            for (const auto &presentMode : presentModes) {
+                if (presentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
+                    swapchainCout() << "vsync+Reflex: using MAILBOX for Reflex frame pacing" << std::endl;
+                    return presentMode;
+                }
+            }
+            swapchainCout() << "vsync+Reflex: MAILBOX unavailable, falling back to FIFO" << std::endl;
+        }
+        return VK_PRESENT_MODE_FIFO_KHR;
+    }
 
     if (supportsMode(VK_PRESENT_MODE_IMMEDIATE_KHR)) { return VK_PRESENT_MODE_IMMEDIATE_KHR; }
 
-    // If mailbox is unavailable, fall back to FIFO (guaranteed to be available)
+    // If immediate is unavailable, fall back to FIFO (guaranteed to be available)
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
@@ -265,6 +284,7 @@ void vk::Swapchain::reconstruct() {
 #ifdef DEBUG
     swapchainCout() << "acquired swap chain images" << std::endl;
 #endif
+
 }
 
 vk::Swapchain::~Swapchain() {
@@ -307,3 +327,4 @@ bool vk::Swapchain::isHdrOutputActive() const {
     return surfaceFormat_.format == VK_FORMAT_R16G16B16A16_SFLOAT &&
            surfaceFormat_.colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT;
 }
+

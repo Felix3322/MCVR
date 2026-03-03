@@ -7,6 +7,7 @@
 #include "core/render/modules/ui_module.hpp"
 #include "core/render/pipeline.hpp"
 #include "core/render/renderer.hpp"
+#include "core/render/streamline_context.hpp"
 #include "core/render/textures.hpp"
 #include "core/render/world.hpp"
 
@@ -231,6 +232,16 @@ void Framework::beginShutdown() {
 void Framework::acquireContext() {
     if (!running_) return;
 
+    // Streamline: advance frame token and sleep at the very top of the frame.
+    // Per NVIDIA QA checklist: "slReflexSleep is called regardless of Reflex Low Latency mode state."
+    // SL handles the mode internally — always call sleep when Reflex is available.
+    if (StreamlineContext::isAvailable()) {
+        StreamlineContext::advanceFrame();
+        if (StreamlineContext::isReflexAvailable()) {
+            StreamlineContext::reflexSleep();
+        }
+    }
+
     std::shared_ptr<FrameworkContext> lastContext;
     if (currentContext_) lastContext = currentContext_;
     VkResult result;
@@ -269,6 +280,11 @@ void Framework::acquireContext() {
     }
     currentContext_->imageAcquiredSemaphore = imageAcquiredSemaphore;
 
+    // PCL: mark simulation start AFTER blocking sync waits (acquire + fence) complete.
+    // Placing it before would inflate simulation time with driver stalls,
+    // giving Reflex inaccurate timing data for its sleep calculations.
+    StreamlineContext::pclSetMarker(sl::PCLMarker::eSimulationStart);
+
     currentContext_->uploadCommandBuffer->begin();
     currentContext_->worldCommandBuffer->begin();
     currentContext_->overlayCommandBuffer->begin();
@@ -305,6 +321,9 @@ void Framework::acquireContext() {
 
 void Framework::submitCommand() {
     if (!running_) return;
+
+    // PCL: simulation phase ends, render phase begins.
+    StreamlineContext::pclSetMarker(sl::PCLMarker::eSimulationEnd);
 
     auto context = safeAcquireCurrentContext();
     if (!running_ || context == nullptr || device_ == nullptr || pipeline_ == nullptr ||
@@ -354,7 +373,11 @@ void Framework::submitCommand() {
 
     std::shared_ptr<vk::Fence> fence = context->commandFinishedFence;
     vkResetFences(device_->vkDevice(), 1, &fence->vkFence());
+
+    // PCL: bracket the GPU submit
+    StreamlineContext::pclSetMarker(sl::PCLMarker::eRenderSubmitStart);
     vkQueueSubmit(device_->mainVkQueue(), 1, &vkSubmitInfo, fence->vkFence());
+    StreamlineContext::pclSetMarker(sl::PCLMarker::eRenderSubmitEnd);
 }
 
 void Framework::present() {
@@ -386,7 +409,10 @@ void Framework::present() {
     presentInfo.pSwapchains = &swapchain_->vkSwapchain();
     presentInfo.pImageIndices = &context->frameIndex;
 
+    // PCL: bracket the present call
+    StreamlineContext::pclSetMarker(sl::PCLMarker::ePresentStart);
     VkResult result = vkQueuePresentKHR(device_->mainVkQueue(), &presentInfo);
+    StreamlineContext::pclSetMarker(sl::PCLMarker::ePresentEnd);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || vk::Window::framebufferResized ||
         Renderer::options.needRecreate || pipeline_->needRecreate) {
@@ -487,6 +513,8 @@ void Framework::close() {
         ngxContext_ = nullptr;
     }
     running_ = false;
+    // Shutdown Streamline before Vulkan device destruction
+    StreamlineContext::shutdown();
 }
 
 bool Framework::isRunning() {

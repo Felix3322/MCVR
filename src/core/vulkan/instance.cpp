@@ -2,7 +2,10 @@
 
 #include "core/render/modules/world/dlss/dlss_wrapper.hpp"
 #include "core/render/modules/world/xess_upscaler/xess_wrapper.hpp"
+#include "core/render/streamline_context.hpp"
 
+#include <Windows.h>
+#include <filesystem>
 #include <iostream>
 #include <set>
 #include <unordered_set>
@@ -39,9 +42,33 @@ VkBool32 debugCallback(VkDebugReportFlagsEXT flags,
 vk::Instance::Instance() {
     GLFW_Init();
 
-    if (volkInitialize() != VK_SUCCESS) {
-        printf("volkInitialize failed!\n");
-        exit(EXIT_SUCCESS);
+    // Try to load Streamline interposer for Reflex + future DLSS-G.
+    // Must happen BEFORE any Vulkan calls.
+    {
+        wchar_t modulePath[MAX_PATH];
+        HMODULE coreModule = nullptr;
+        // Use address of this static variable to locate core.dll
+        static const int coreAnchor = 0;
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&coreAnchor),
+            &coreModule);
+        GetModuleFileNameW(coreModule, modulePath, MAX_PATH);
+        std::filesystem::path pluginDir = std::filesystem::path(modulePath).parent_path();
+        StreamlineContext::init(pluginDir.wstring().c_str());
+    }
+
+    // Initialize Vulkan loader (volk).
+    // If Streamline is available, route through its interposer for present/acquire hooking.
+    auto slVkGIPA = reinterpret_cast<PFN_vkGetInstanceProcAddr>(StreamlineContext::getVkGetInstanceProcAddr());
+    if (slVkGIPA) {
+        volkInitializeCustom(slVkGIPA);
+        instanceCout() << "volk initialized via Streamline interposer" << std::endl;
+    } else {
+        if (volkInitialize() != VK_SUCCESS) {
+            printf("volkInitialize failed!\n");
+            exit(EXIT_SUCCESS);
+        }
     }
 
     VkApplicationInfo appInfo = {};
@@ -144,6 +171,11 @@ vk::Instance::Instance() {
 #ifdef DEBUG
     extStorage.insert(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 #endif
+
+    // Streamline SDK required instance extensions (Reflex, DLSS-G)
+    for (const auto &ext : StreamlineContext::getRequiredInstanceExtensions()) {
+        extStorage.insert(ext);
+    }
 
     // Check for extensions
     uint32_t extensionCount = 0;

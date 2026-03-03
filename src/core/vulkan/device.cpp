@@ -2,6 +2,7 @@
 
 #include "core/render/modules/world/dlss/dlss_wrapper.hpp"
 #include "core/render/modules/world/xess_upscaler/xess_wrapper.hpp"
+#include "core/render/streamline_context.hpp"
 #include "core/vulkan/instance.hpp"
 #include "core/vulkan/physical_device.hpp"
 
@@ -107,6 +108,12 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
     }
 #endif
 
+    // Streamline SDK required device extensions (Reflex, DLSS-G)
+    // Storage must outlive enabledExtensions pointers
+    const auto &slDevExts = StreamlineContext::getRequiredDeviceExtensions();
+    for (const auto &ext : slDevExts) {
+        enabledExtensions.push_back(ext.c_str());
+    }
     uint32_t deviceExtensionCount = 0;
     vkEnumerateDeviceExtensionProperties(physicalDevice_->vkPhysicalDevice(), nullptr, &deviceExtensionCount, nullptr);
     std::vector<VkExtensionProperties> deviceExtensions(deviceExtensionCount);
@@ -373,6 +380,12 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
     }
 #endif
 
+    // Streamline interposer: use interposer's vkCreateDevice so it can track the VkDevice.
+    // Without this, slSetVulkanInfo fails with eErrorInvalidIntegration because the
+    // interposer has no record of the device handle.
+    auto slCreateDevice = reinterpret_cast<PFN_vkCreateDevice>(StreamlineContext::getVkCreateDevice());
+    PFN_vkCreateDevice createDeviceFn = slCreateDevice ? slCreateDevice : vkCreateDevice;
+
     // create logical device
     VkDeviceCreateInfo deviceCreateInfo = {};
     if (physicalDevice_->mainQueueIndex() == physicalDevice_->secondaryQueueIndex()) {
@@ -391,7 +404,7 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
         deviceCreateInfo.pNext = &features2;
         deviceCreateInfo.pEnabledFeatures = nullptr;
 
-        if (vkCreateDevice(physicalDevice_->vkPhysicalDevice(), &deviceCreateInfo, nullptr, &device_) != VK_SUCCESS) {
+        if (createDeviceFn(physicalDevice_->vkPhysicalDevice(), &deviceCreateInfo, nullptr, &device_) != VK_SUCCESS) {
             deviceCerr() << "Failed to create logical device!" << std::endl;
             exit(EXIT_FAILURE);
         }
@@ -416,13 +429,30 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
         deviceCreateInfo.pNext = &features2;
         deviceCreateInfo.pEnabledFeatures = nullptr;
 
-        if (vkCreateDevice(physicalDevice_->vkPhysicalDevice(), &deviceCreateInfo, nullptr, &device_) != VK_SUCCESS) {
+        if (createDeviceFn(physicalDevice_->vkPhysicalDevice(), &deviceCreateInfo, nullptr, &device_) != VK_SUCCESS) {
             deviceCerr() << "Failed to create logical device!" << std::endl;
             exit(EXIT_FAILURE);
         }
     }
 
+    // Streamline: the interposer's vkCreateDevice hook already registered the device
+    // and initialized plugins. Just load feature function pointers (Reflex, etc.).
+    StreamlineContext::onDeviceCreated();
+
     volkLoadDevice(device_);
+
+    // Streamline interposer: volkLoadDevice replaces all device-level function pointers with
+    // raw driver dispatch (via vkGetDeviceProcAddr), bypassing the interposer's hooks.
+    // Re-override the mandatory hooks that SL needs for Reflex/DLSS-G (present, acquire, swapchain).
+    auto slGDPA = reinterpret_cast<PFN_vkGetDeviceProcAddr>(StreamlineContext::getVkGetDeviceProcAddr());
+    if (slGDPA) {
+        vkQueuePresentKHR = reinterpret_cast<PFN_vkQueuePresentKHR>(slGDPA(device_, "vkQueuePresentKHR"));
+        vkCreateSwapchainKHR = reinterpret_cast<PFN_vkCreateSwapchainKHR>(slGDPA(device_, "vkCreateSwapchainKHR"));
+        vkDestroySwapchainKHR = reinterpret_cast<PFN_vkDestroySwapchainKHR>(slGDPA(device_, "vkDestroySwapchainKHR"));
+        vkGetSwapchainImagesKHR = reinterpret_cast<PFN_vkGetSwapchainImagesKHR>(slGDPA(device_, "vkGetSwapchainImagesKHR"));
+        vkAcquireNextImageKHR = reinterpret_cast<PFN_vkAcquireNextImageKHR>(slGDPA(device_, "vkAcquireNextImageKHR"));
+        vkDeviceWaitIdle = reinterpret_cast<PFN_vkDeviceWaitIdle>(slGDPA(device_, "vkDeviceWaitIdle"));
+    }
 
 #ifdef DEBUG
     deviceCout() << "Logical device created successfully!" << std::endl;

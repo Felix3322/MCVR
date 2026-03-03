@@ -59,6 +59,14 @@ set(STB_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/extern/stb)
 # DLSS
 add_subdirectory(extern/DLSS EXCLUDE_FROM_ALL)
 
+# Streamline SDK (Reflex, DLSS-G — dynamic loading, no .lib)
+add_subdirectory(extern/streamline EXCLUDE_FROM_ALL)
+
+# Install Streamline DLLs alongside core.dll and into JAR resources
+file(GLOB __SL_DLLS "${PROJECT_SOURCE_DIR}/extern/streamline/bin/*.dll")
+install(FILES ${__SL_DLLS} DESTINATION ${MCVR_INSTALL_BIN_DIR})
+install(FILES ${__SL_DLLS} DESTINATION ${MCVR_INSTALL_LIB_DIR})
+
 # JNI
 find_package(JNI REQUIRED)
 message(STATUS "${JNI_INCLUDE_DIRS}")
