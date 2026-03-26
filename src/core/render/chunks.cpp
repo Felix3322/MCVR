@@ -17,6 +17,7 @@ ChunkBuildData::ChunkBuildData(int64_t id,
                                uint32_t allVertexCount,
                                uint32_t allIndexCount,
                                uint32_t geometryCount,
+                               uint64_t lightStateHash,
                                std::vector<World::GeometryTypes> &&geometryTypes,
                                std::vector<std::string> &&geometryGroupNames,
                                std::vector<std::vector<vk::VertexFormat::PBRVertex>> &&vertices,
@@ -29,6 +30,7 @@ ChunkBuildData::ChunkBuildData(int64_t id,
       allVertexCount(allVertexCount),
       allIndexCount(allIndexCount),
       geometryCount(geometryCount),
+      lightStateHash(lightStateHash),
       geometryTypes(std::move(geometryTypes)),
       geometryGroupNames(std::move(geometryGroupNames)),
       vertices(std::move(vertices)),
@@ -115,6 +117,7 @@ ChunkBuildScheduler::ChunkBuildScheduler(std::set<int64_t> &queuedIndex,
                                          std::vector<std::shared_ptr<ChunkBuildData>> &chunkBuildDatas,
                                          std::recursive_mutex &mutex,
                                          std::shared_ptr<vk::HostVisibleBuffer> &chunkPackedData,
+                                         Chunks *owner,
                                          uint32_t chunkBuildingBatchSize,
                                          uint32_t chunkBuildingTotalBatches)
     : queuedIndex_(queuedIndex),
@@ -122,6 +125,7 @@ ChunkBuildScheduler::ChunkBuildScheduler(std::set<int64_t> &queuedIndex,
       chunkBuildDatas_(chunkBuildDatas),
       mutex_(mutex),
       chunkPackedData_(chunkPackedData),
+      owner_(owner),
       chunkBuildingBatchSize_(chunkBuildingBatchSize),
       chunkBuildingTotalBatches_(chunkBuildingTotalBatches) {
     auto framework = Renderer::instance().framework();
@@ -144,7 +148,13 @@ void ChunkBuildScheduler::tryCheckBatchesFinish() {
             freeFences_.push(*iterFence);
 
             for (auto chunkBuildData : (*iterBatch)->batchData) {
-                chunks_[chunkBuildData->id]->enqueue(chunkBuildData);
+                bool lightStateChanged = chunks_[chunkBuildData->id]->enqueue(chunkBuildData);
+                if (lightStateChanged) {
+                    int sectionX = chunkBuildData->x >> 4;
+                    int sectionY = chunkBuildData->y >> 4;
+                    int sectionZ = chunkBuildData->z >> 4;
+                    if (owner_ != nullptr) { owner_->markLightSectionDirty(sectionX, sectionY, sectionZ, 0); }
+                }
 
                 ChunkPackedData data = {
                     .geometryCount = chunkBuildData->geometryCount,
@@ -173,7 +183,13 @@ void ChunkBuildScheduler::waitAllBatchesFinish() {
             freeFences_.push(*iterFence);
 
             for (auto chunkBuildData : (*iterBatch)->batchData) {
-                chunks_[chunkBuildData->id]->enqueue(chunkBuildData);
+                bool lightStateChanged = chunks_[chunkBuildData->id]->enqueue(chunkBuildData);
+                if (lightStateChanged) {
+                    int sectionX = chunkBuildData->x >> 4;
+                    int sectionY = chunkBuildData->y >> 4;
+                    int sectionZ = chunkBuildData->z >> 4;
+                    if (owner_ != nullptr) { owner_->markLightSectionDirty(sectionX, sectionY, sectionZ, 0); }
+                }
 
                 ChunkPackedData data = {
                     .geometryCount = chunkBuildData->geometryCount,
@@ -313,14 +329,17 @@ float Chunk1::buildFactor(std::chrono::steady_clock::time_point currentTime, glm
     return score;
 }
 
-void Chunk1::enqueue(std::shared_ptr<ChunkBuildData> chunkBuildData) {
+bool Chunk1::enqueue(std::shared_ptr<ChunkBuildData> chunkBuildData) {
     auto framework = Renderer::instance().framework();
     auto &gc = framework->gc();
+    bool lightStateChanged = !hasLightStateHash || lightStateHash != chunkBuildData->lightStateHash;
 
     lastUpdate = std::chrono::steady_clock::now();
     x = chunkBuildData->x;
     y = chunkBuildData->y;
     z = chunkBuildData->z;
+    lightStateHash = chunkBuildData->lightStateHash;
+    hasLightStateHash = true;
 
     if (chunkBuildData->version > blasVersion) {
         blasVersion = chunkBuildData->version;
@@ -367,6 +386,7 @@ void Chunk1::enqueue(std::shared_ptr<ChunkBuildData> chunkBuildData) {
     vertices =
         std::make_shared<std::vector<std::vector<vk::VertexFormat::PBRVertex>>>(std::move(chunkBuildData->vertices));
     indices = std::make_shared<std::vector<std::vector<uint32_t>>>(std::move(chunkBuildData->indices));
+    return lightStateChanged;
 }
 
 void Chunk1::invalidate() {
@@ -391,6 +411,8 @@ void Chunk1::invalidate() {
 
     gc.collect(materialBuffers);
     materialBuffers = nullptr;
+    hasLightStateHash = false;
+    lightStateHash = 0;
 }
 
 std::shared_ptr<ChunkRenderData> Chunk1::tryGetValid() {
@@ -439,6 +461,11 @@ void Chunks::reset(uint32_t numChunks) {
     chunkBuildDatas_.clear();
     chunkBuildDatas_.resize(numChunks);
     queuedIndex_.clear();
+    hasLightingDirtySections_ = false;
+    lightingDirtyQueuedThisFrame_ = false;
+    lightingDirtyFramesRemaining_ = 0;
+    sceneLightRevision_ = 0;
+    framesSinceLastLightingDirty_ = 1024;
 
     for (int i = 0; i < numChunks; i++) {
         chunks_[i] = Chunk1::create();
@@ -448,7 +475,7 @@ void Chunks::reset(uint32_t numChunks) {
     uint32_t chunkBuildingBatchSize = Renderer::instance().options.chunkBuildingBatchSize;
     uint32_t chunkBuildingTotalBatches = Renderer::instance().options.chunkBuildingTotalBatches;
     chunkBuildScheduler_ =
-        ChunkBuildScheduler::create(queuedIndex_, chunks_, chunkBuildDatas_, mutex_, chunkPackedData_,
+        ChunkBuildScheduler::create(queuedIndex_, chunks_, chunkBuildDatas_, mutex_, chunkPackedData_, this,
                                     chunkBuildingBatchSize, chunkBuildingTotalBatches);
 }
 
@@ -462,7 +489,7 @@ void Chunks::resetScheduler() {
     uint32_t chunkBuildingBatchSize = Renderer::instance().options.chunkBuildingBatchSize;
     uint32_t chunkBuildingTotalBatches = Renderer::instance().options.chunkBuildingTotalBatches;
     chunkBuildScheduler_ =
-        ChunkBuildScheduler::create(queuedIndex_, chunks_, chunkBuildDatas_, mutex_, chunkPackedData_,
+        ChunkBuildScheduler::create(queuedIndex_, chunks_, chunkBuildDatas_, mutex_, chunkPackedData_, this,
                                     chunkBuildingBatchSize, chunkBuildingTotalBatches);
 }
 
@@ -473,10 +500,29 @@ void Chunks::resetFrame() {
 
     gc.collect(importantBLASBuilders_);
     importantBLASBuilders_ = std::make_shared<std::vector<std::shared_ptr<vk::BLASBuilder>>>();
+
+    if (!lightingDirtyQueuedThisFrame_ && framesSinceLastLightingDirty_ < UINT32_MAX) {
+        framesSinceLastLightingDirty_++;
+    }
+    lightingDirtyQueuedThisFrame_ = false;
+    if (lightingDirtyFramesRemaining_ > 0) {
+        lightingDirtyFramesRemaining_--;
+        if (lightingDirtyFramesRemaining_ == 0) { hasLightingDirtySections_ = false; }
+    }
 }
 
 void Chunks::invalidateChunk(int id) {
     std::unique_lock<std::recursive_mutex> lock(mutex_);
+    if (id >= 0 && id < static_cast<int>(chunks_.size())) {
+        auto &chunk = chunks_[id];
+        if (chunk != nullptr && chunk->hasLightStateHash) {
+            int sectionX = chunk->x >> 4;
+            int sectionY = chunk->y >> 4;
+            int sectionZ = chunk->z >> 4;
+            noteLightingDirtySections(glm::ivec3(sectionX - 1, sectionY - 1, sectionZ - 1),
+                                      glm::ivec3(sectionX + 1, sectionY + 1, sectionZ + 1));
+        }
+    }
     chunks_[id]->invalidate();
 
     ChunkPackedData data = {
@@ -533,8 +579,8 @@ void Chunks::queueChunkBuild(ChunkBuildTask task) {
 
     std::shared_ptr<ChunkBuildData> chunkBuildData = ChunkBuildData::create(
         task.id, task.x, task.y, task.z, chunks_[task.id]->latestVersion++, allVertexCount, allIndexCount,
-        task.geometryCount, std::move(geometryTypes), std::move(geometryGroupNames), std::move(vertices),
-        std::move(indices));
+        task.geometryCount, task.lightStateHash, std::move(geometryTypes), std::move(geometryGroupNames),
+        std::move(vertices), std::move(indices));
 
     if (task.isImportant) {
         chunkBuildData->build();
@@ -546,7 +592,14 @@ void Chunks::queueChunkBuild(ChunkBuildTask task) {
         }
         importantBLASBuilders_->push_back(chunkBuildData->blasBuilder);
 
-        chunks_[task.id]->enqueue(chunkBuildData);
+        bool lightStateChanged = chunks_[task.id]->enqueue(chunkBuildData);
+        if (lightStateChanged) {
+            int sectionX = task.x >> 4;
+            int sectionY = task.y >> 4;
+            int sectionZ = task.z >> 4;
+            noteLightingDirtySections(glm::ivec3(sectionX - 1, sectionY - 1, sectionZ - 1),
+                                      glm::ivec3(sectionX + 1, sectionY + 1, sectionZ + 1));
+        }
 
         ChunkPackedData data = {
             .geometryCount = chunkBuildData->geometryCount,
@@ -563,6 +616,30 @@ bool Chunks::isChunkReady(int64_t id) {
     std::unique_lock<std::recursive_mutex> lock(mutex_);
     auto chunkRenderData = chunks_[id]->tryGetValid();
     return chunkRenderData->blas != nullptr;
+}
+
+void Chunks::markLightSectionDirty(int sectionX, int sectionY, int sectionZ, int lightType) {
+    std::unique_lock<std::recursive_mutex> lock(mutex_);
+    (void)lightType;
+    noteLightingDirtySections(glm::ivec3(sectionX - 1, sectionY - 1, sectionZ - 1),
+                              glm::ivec3(sectionX + 1, sectionY + 1, sectionZ + 1));
+}
+
+LightingDirtyState Chunks::lightingDirtyState() {
+    std::unique_lock<std::recursive_mutex> lock(mutex_);
+    LightingDirtyState state{};
+    state.sceneLightRevision = sceneLightRevision_;
+    state.framesSinceLastDirty = framesSinceLastLightingDirty_;
+    state.dirtyFramesRemaining = lightingDirtyFramesRemaining_;
+    state.active = hasLightingDirtySections_ && lightingDirtyFramesRemaining_ > 0;
+    if (!state.active) { return state; }
+
+    glm::vec3 minWorld = glm::vec3(lightingDirtyMinSection_) * 16.0f;
+    glm::vec3 maxWorld = glm::vec3(lightingDirtyMaxSection_ + glm::ivec3(1)) * 16.0f;
+    glm::vec3 center = (minWorld + maxWorld) * 0.5f;
+    glm::vec3 halfExtent = (maxWorld - minWorld) * 0.5f;
+    state.centerRadius = glm::vec4(center, glm::length(halfExtent) + 16.0f);
+    return state;
 }
 
 void Chunks::close() {
@@ -598,4 +675,23 @@ std::vector<std::shared_ptr<vk::BLASBuilder>> &Chunks::importantBLASBuilders() {
 
 std::shared_ptr<vk::HostVisibleBuffer> Chunks::chunkPackedData() {
     return chunkPackedData_;
+}
+
+void Chunks::noteLightingDirtySections(const glm::ivec3 &minSection, const glm::ivec3 &maxSection) {
+    if (!hasLightingDirtySections_) {
+        lightingDirtyMinSection_ = minSection;
+        lightingDirtyMaxSection_ = maxSection;
+        hasLightingDirtySections_ = true;
+    } else {
+        lightingDirtyMinSection_ = glm::min(lightingDirtyMinSection_, minSection);
+        lightingDirtyMaxSection_ = glm::max(lightingDirtyMaxSection_, maxSection);
+    }
+
+    if (!lightingDirtyQueuedThisFrame_) {
+        sceneLightRevision_++;
+        lightingDirtyQueuedThisFrame_ = true;
+    }
+
+    lightingDirtyFramesRemaining_ = std::max(lightingDirtyFramesRemaining_, 24u);
+    framesSinceLastLightingDirty_ = 0;
 }

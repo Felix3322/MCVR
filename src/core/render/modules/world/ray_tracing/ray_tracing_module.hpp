@@ -12,7 +12,7 @@
 #include <unordered_map>
 
 class Framework;
-class FrameworkContext;
+struct FrameworkContext;
 class WorldPipeline;
 struct WorldModuleContext;
 
@@ -101,6 +101,8 @@ class RayTracingModule : public WorldModule, public SharedObject<RayTracingModul
         uint32_t useLockBuffer;
         uint32_t debugMode;
         uint32_t updateDownsampleFactor;
+        glm::vec4 dirtyRegionCenterRadius;
+        glm::uvec4 sceneState;
     };
 
   private:
@@ -186,6 +188,9 @@ class RayTracingModule : public WorldModule, public SharedObject<RayTracingModul
     glm::dvec3 sharcPrevCameraPos_ = glm::dvec3(0.0);
     uint32_t sharcFrameIndex_ = 0;
     bool sharcFirstFrame_ = true;
+    uint32_t sharcPrevLightRevision_ = 0;
+    uint32_t sharcStableUpdateStride_ = 1;
+    uint32_t sharcEffectiveUpdateDownsampleFactor_ = 1;
 
     uint32_t numRayBounces_ = 4;
     bool useJitter_ = true;

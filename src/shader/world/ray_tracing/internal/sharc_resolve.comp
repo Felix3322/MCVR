@@ -41,6 +41,8 @@ struct SharcConfig {
     uint useLockBuffer;
     uint debugMode;
     uint updateDownsampleFactor;
+    vec4 dirtyRegionCenterRadius;
+    uvec4 sceneState;
 };
 
 layout(set = 4, binding = 0) readonly buffer SharcConfigBuffer {

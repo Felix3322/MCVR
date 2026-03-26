@@ -20,6 +20,7 @@
 #include <vector>
 
 class Framework;
+class Chunks;
 
 struct ChunkBuildTask {
     int x, y, z;
@@ -31,6 +32,7 @@ struct ChunkBuildTask {
     int *vertexFormats;
     int *vertexCounts;
     vk::VertexFormat::PBRVertex **vertices;
+    uint64_t lightStateHash;
     bool isImportant;
 };
 
@@ -41,6 +43,7 @@ struct ChunkBuildData : public SharedObject<ChunkBuildData> {
     uint32_t allVertexCount;
     uint32_t allIndexCount;
     uint32_t geometryCount;
+    uint64_t lightStateHash;
     std::vector<World::GeometryTypes> geometryTypes;
     std::vector<std::string> geometryGroupNames;
     std::vector<std::vector<vk::VertexFormat::PBRVertex>> vertices;
@@ -60,6 +63,7 @@ struct ChunkBuildData : public SharedObject<ChunkBuildData> {
                    uint32_t allVertexCount,
                    uint32_t allIndexCount,
                    uint32_t geometryCount,
+                   uint64_t lightStateHash,
                    std::vector<World::GeometryTypes> &&geometryTypes,
                    std::vector<std::string> &&geometryGroupNames,
                    std::vector<std::vector<vk::VertexFormat::PBRVertex>> &&vertices,
@@ -87,6 +91,7 @@ class ChunkBuildScheduler : public SharedObject<ChunkBuildScheduler> {
                         std::vector<std::shared_ptr<ChunkBuildData>> &chunkBuildDatas,
                         std::recursive_mutex &mutex,
                         std::shared_ptr<vk::HostVisibleBuffer> &chunkPackedData,
+                        Chunks *owner,
                         uint32_t chunkBuildingBatchSize,
                         uint32_t chunkBuildingTotalBatches);
 
@@ -103,6 +108,7 @@ class ChunkBuildScheduler : public SharedObject<ChunkBuildScheduler> {
     std::vector<std::shared_ptr<ChunkBuildData>> &chunkBuildDatas_;
     std::recursive_mutex &mutex_;
     std::shared_ptr<vk::HostVisibleBuffer> &chunkPackedData_;
+    Chunks *owner_;
 
     std::queue<std::shared_ptr<vk::Fence>> freeFences_;
     std::list<std::shared_ptr<vk::Fence>> buildingFences_;
@@ -150,6 +156,8 @@ struct Chunk1 : public SharedObject<Chunk1> {
     uint32_t allVertexCount;
     uint32_t allIndexCount;
     uint32_t geometryCount;
+    uint64_t lightStateHash = 0;
+    bool hasLightStateHash = false;
     std::shared_ptr<std::vector<World::GeometryTypes>> geometryTypes;
     std::shared_ptr<std::vector<std::string>> geometryGroupNames;
     std::shared_ptr<std::vector<std::vector<vk::VertexFormat::PBRVertex>>> vertices;
@@ -157,13 +165,21 @@ struct Chunk1 : public SharedObject<Chunk1> {
 
     float buildFactor(std::chrono::steady_clock::time_point currentTime, glm::vec3 cameraPos);
 
-    void enqueue(std::shared_ptr<ChunkBuildData> chunkBuildData);
+    bool enqueue(std::shared_ptr<ChunkBuildData> chunkBuildData);
     void invalidate();
     std::shared_ptr<ChunkRenderData> tryGetValid();
 };
 
 struct ChunkPackedData {
     uint32_t geometryCount;
+};
+
+struct LightingDirtyState {
+    bool active = false;
+    glm::vec4 centerRadius = glm::vec4(0.0f, 0.0f, 0.0f, -1.0f);
+    uint32_t sceneLightRevision = 0;
+    uint32_t framesSinceLastDirty = 0;
+    uint32_t dirtyFramesRemaining = 0;
 };
 
 class Chunks : public SharedObject<Chunks> {
@@ -176,9 +192,11 @@ class Chunks : public SharedObject<Chunks> {
     void resetScheduler();
     void resetFrame();
     void invalidateChunk(int id);
+    void markLightSectionDirty(int sectionX, int sectionY, int sectionZ, int lightType);
     void queueChunkBuild(ChunkBuildTask task);
 
     bool isChunkReady(int64_t id);
+    LightingDirtyState lightingDirtyState();
 
     void close();
 
@@ -189,6 +207,8 @@ class Chunks : public SharedObject<Chunks> {
     std::shared_ptr<vk::HostVisibleBuffer> chunkPackedData();
 
   private:
+    void noteLightingDirtySections(const glm::ivec3 &minSection, const glm::ivec3 &maxSection);
+
     std::recursive_mutex mutex_;
     std::vector<std::shared_ptr<Chunk1>> chunks_;
     std::shared_ptr<vk::HostVisibleBuffer> chunkPackedData_ = nullptr;
@@ -197,4 +217,11 @@ class Chunks : public SharedObject<Chunks> {
     std::shared_ptr<ChunkBuildScheduler> chunkBuildScheduler_;
 
     std::shared_ptr<std::vector<std::shared_ptr<vk::BLASBuilder>>> importantBLASBuilders_;
+    bool hasLightingDirtySections_ = false;
+    bool lightingDirtyQueuedThisFrame_ = false;
+    glm::ivec3 lightingDirtyMinSection_ = glm::ivec3(0);
+    glm::ivec3 lightingDirtyMaxSection_ = glm::ivec3(0);
+    uint32_t lightingDirtyFramesRemaining_ = 0;
+    uint32_t sceneLightRevision_ = 0;
+    uint32_t framesSinceLastLightingDirty_ = 1024;
 };

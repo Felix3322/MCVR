@@ -3,6 +3,7 @@
 #include "core/render/buffers.hpp"
 #include "core/render/modules/world/ray_tracing/submodules/atmosphere.hpp"
 #include "core/render/modules/world/ray_tracing/submodules/world_prepare.hpp"
+#include "core/render/chunks.hpp"
 #include "core/render/pipeline.hpp"
 #include "core/render/render_framework.hpp"
 #include "core/render/renderer.hpp"
@@ -669,10 +670,29 @@ void RayTracingModule::updateSharcConfig(uint32_t frameIndex) {
     if (worldUbo == nullptr) { return; }
 
     glm::dvec3 currentCameraPos(worldUbo->cameraPos.x, worldUbo->cameraPos.y, worldUbo->cameraPos.z);
+    auto lightingDirtyState = Renderer::instance().world()->chunks()->lightingDirtyState();
     if (sharcFirstFrame_) {
         sharcPrevCameraPos_ = currentCameraPos;
+        sharcPrevLightRevision_ = lightingDirtyState.sceneLightRevision;
         sharcFirstFrame_ = false;
     }
+
+    const bool dirtyRegionActive =
+        lightingDirtyState.active && lightingDirtyState.centerRadius.w > 0.0f && lightingDirtyState.dirtyFramesRemaining > 0;
+    const bool lightRevisionChanged = lightingDirtyState.sceneLightRevision != sharcPrevLightRevision_;
+    uint32_t effectiveDownsampleFactor = std::max(1u, sharcUpdateDownsampleFactor_);
+    uint32_t stableUpdateStride = 1;
+    if (dirtyRegionActive || lightRevisionChanged) {
+        effectiveDownsampleFactor = std::max(1u, (effectiveDownsampleFactor + 1u) / 2u);
+    } else if (lightingDirtyState.framesSinceLastDirty >= 48u) {
+        stableUpdateStride = 3u;
+        effectiveDownsampleFactor = std::min(12u, effectiveDownsampleFactor * 2u + 1u);
+    } else if (lightingDirtyState.framesSinceLastDirty >= 16u) {
+        stableUpdateStride = 2u;
+        effectiveDownsampleFactor = std::min(10u, effectiveDownsampleFactor * 2u);
+    }
+    sharcEffectiveUpdateDownsampleFactor_ = effectiveDownsampleFactor;
+    sharcStableUpdateStride_ = stableUpdateStride;
 
     auto splitAddress = [](VkDeviceAddress address) {
         return std::array<uint32_t, 2>{static_cast<uint32_t>(address & 0xFFFFFFFFu),
@@ -706,11 +726,20 @@ void RayTracingModule::updateSharcConfig(uint32_t frameIndex) {
     config.enableAntiFireflyFilter = 1;
     config.useLockBuffer = 0;
     config.debugMode = sharcDebugMode_;
-    config.updateDownsampleFactor = sharcUpdateDownsampleFactor_;
+    config.updateDownsampleFactor = sharcEffectiveUpdateDownsampleFactor_;
+    config.dirtyRegionCenterRadius =
+        dirtyRegionActive ? lightingDirtyState.centerRadius : glm::vec4(0.0f, 0.0f, 0.0f, -1.0f);
+    config.sceneState = glm::uvec4(0u);
+    config.sceneState.x = static_cast<glm::uint>(lightingDirtyState.sceneLightRevision);
+    config.sceneState.y = static_cast<glm::uint>(sharcPrevLightRevision_);
+    config.sceneState.z = static_cast<glm::uint>(sharcStableUpdateStride_);
+    config.sceneState.w = static_cast<glm::uint>((dirtyRegionActive ? 0x1u : 0u) |
+                                                 (lightRevisionChanged ? 0x2u : 0u));
 
     sharcConfigBuffers_[frameIndex]->uploadToBuffer(&config);
 
     sharcPrevCameraPos_ = currentCameraPos;
+    sharcPrevLightRevision_ = lightingDirtyState.sceneLightRevision;
     sharcFrameIndex_++;
 }
 
@@ -1391,7 +1420,7 @@ void RayTracingModuleContext::render() {
     if (!barriers.empty()) { worldCommandBuffer->barriersBufferImage({}, barriers); }
 
     if (module->useSharcRuntime_) {
-        const uint32_t updateDownsampleFactor = std::max(1u, module->sharcUpdateDownsampleFactor_);
+        const uint32_t updateDownsampleFactor = std::max(1u, module->sharcEffectiveUpdateDownsampleFactor_);
         const uint32_t updateWidth =
             (hdrNoisyOutputImage->width() + updateDownsampleFactor - 1) / updateDownsampleFactor;
         const uint32_t updateHeight =

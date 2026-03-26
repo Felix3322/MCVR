@@ -22,6 +22,7 @@ JNIEXPORT void JNICALL Java_com_radiance_client_proxy_world_ChunkProxy_rebuildSi
                                                                                      jlong vertexFormats,
                                                                                      jlong vertexCounts,
                                                                                      jlong vertexAddrs,
+                                                                                     jlong lightStateHash,
                                                                                      jboolean important) {
     auto world = Renderer::instance().world();
     if (world == nullptr) return;
@@ -37,6 +38,7 @@ JNIEXPORT void JNICALL Java_com_radiance_client_proxy_world_ChunkProxy_rebuildSi
         .vertexFormats = reinterpret_cast<int *>(vertexFormats),
         .vertexCounts = reinterpret_cast<int *>(vertexCounts),
         .vertices = reinterpret_cast<vk::VertexFormat::PBRVertex **>(vertexAddrs),
+        .lightStateHash = static_cast<uint64_t>(lightStateHash),
         .isImportant = static_cast<bool>(important),
     });
 }
@@ -53,4 +55,15 @@ JNIEXPORT void JNICALL Java_com_radiance_client_proxy_world_ChunkProxy_invalidat
     auto world = Renderer::instance().world();
     if (world == nullptr) return;
     world->chunks()->invalidateChunk(index);
+}
+
+JNIEXPORT void JNICALL Java_com_radiance_client_proxy_world_ChunkProxy_markLightDirtySection(JNIEnv *,
+                                                                                             jclass,
+                                                                                             jint sectionX,
+                                                                                             jint sectionY,
+                                                                                             jint sectionZ,
+                                                                                             jint lightType) {
+    auto world = Renderer::instance().world();
+    if (world == nullptr) return;
+    world->chunks()->markLightSectionDirty(sectionX, sectionY, sectionZ, lightType);
 }

@@ -101,6 +101,8 @@ struct SharcConfig {
     uint useLockBuffer;
     uint debugMode;
     uint updateDownsampleFactor;
+    vec4 dirtyRegionCenterRadius;
+    uvec4 sceneState;
 };
 
 layout(set = 4, binding = 0) readonly buffer SharcConfigBuffer {
@@ -183,6 +185,34 @@ SharcParameters makeSharcParameters() {
     sharcParameters.accumulationBuffer = RWStructuredBuffer_SharcAccumulationData(sharcConfig.accumulationAddress);
     sharcParameters.resolvedBuffer = RWStructuredBuffer_SharcPackedData(sharcConfig.resolvedAddress);
     return sharcParameters;
+}
+
+bool sharcRayTouchesDirtyRegion(vec3 rayOriginWorld, vec3 rayDirection) {
+    float radius = sharcConfig.dirtyRegionCenterRadius.w;
+    if (radius <= 0.0) { return false; }
+
+    vec3 center = sharcConfig.dirtyRegionCenterRadius.xyz;
+    float expandedRadius = radius + max(16.0, sharcConfig.sceneScale * 0.75);
+    vec3 oc = rayOriginWorld - center;
+    float b = dot(oc, rayDirection);
+    float c = dot(oc, oc) - expandedRadius * expandedRadius;
+    float discriminant = b * b - c;
+    return discriminant >= 0.0;
+}
+
+bool shouldTraceSharcUpdate(ivec2 block, vec3 rayOriginWorld, vec3 rayDirection) {
+    uint stableStride = max(sharcConfig.sceneState.z, 1u);
+    if (stableStride <= 1u && sharcConfig.dirtyRegionCenterRadius.w <= 0.0) { return true; }
+
+    uint refreshHash =
+        xxhash32(uvec3(uint(block.x), uint(block.y), sharcConfig.frameIndex ^ sharcConfig.sceneState.x));
+    if (sharcConfig.dirtyRegionCenterRadius.w > 0.0) {
+        if (sharcRayTouchesDirtyRegion(rayOriginWorld, rayDirection)) { return true; }
+        uint sparseStride = max(stableStride * 3u, 6u);
+        return (refreshHash % sparseStride) == 0u;
+    }
+
+    return (refreshHash % stableStride) == 0u;
 }
 
 bool sharcAllowQuery(bool isPrimaryCameraPath,
@@ -591,6 +621,7 @@ void main() {
     const uint rayFlags = kRayFlags; // gl_RayFlagsCullBackFacingTrianglesEXT;
 
 #if USE_SHARC && SHARC_UPDATE
+    if (!shouldTraceSharcUpdate(block, origin + vec3(worldUBO.cameraPos.xyz), direction)) { return; }
     traceSharcUpdate(pixel, resolution, origin, direction, fovY, fovX, rayFlags);
     return;
 #else
