@@ -502,6 +502,9 @@ void ToneMappingModuleContext::render() {
         std::clamp(module->exposureMeteringMode_, static_cast<int>(TONE_MAPPING_EXPOSURE_METERING_MODE_GLOBAL),
                    static_cast<int>(TONE_MAPPING_EXPOSURE_METERING_MODE_CENTER));
     pc.centerMeteringPercent = sanitizedCenterMeteringPercent;
+    pc.hdrHeadroom = 4.0f;
+    pc.outputMode = framework->swapchain()->isHdrOutputActive() ? TONE_MAPPING_OUTPUT_MODE_HDR_SCRGB
+                                                                : TONE_MAPPING_OUTPUT_MODE_LDR_SRGB;
 
     vkCmdPushConstants(worldCommandBuffer->vkCommandBuffer(), descriptorTable->vkPipelineLayout(),
                        VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,

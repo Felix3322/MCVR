@@ -87,6 +87,8 @@ layout(push_constant) uniform PushConstant {
     float basicRadiance;
     uint pbrSamplingMode;
     uint transparentSplitMode;
+    float farFieldStartDistanceChunks;
+    uint farFieldMaterialMode;
 }
 pc;
 
@@ -114,6 +116,9 @@ void main() {
 
     vec3 baryCoords = vec3(1.0 - (attribs.x + attribs.y), attribs.x, attribs.y);
     vec3 worldPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
+    bool useFarFieldFlatMaterial =
+        pc.farFieldMaterialMode != 0u &&
+        dot(worldPos, worldPos) >= pow(pc.farFieldStartDistanceChunks * 16.0, 2.0);
     uint coordinate = v0.coordinate;
     vec3 normal = baryCoords.x * v0.norm + baryCoords.y * v1.norm + baryCoords.z * v2.norm;
     if (coordinate == 1) {
@@ -135,7 +140,8 @@ void main() {
     float albedoEmission =
         baryCoords.x * v0.albedoEmission + baryCoords.y * v1.albedoEmission + baryCoords.z * v2.albedoEmission;
     uint textureID = v0.textureID;
-    uint alphaMode = v0.alphaMode;
+    bool forceNoPbrMaterial = (v0.alphaMode & 0x100u) != 0u;
+    uint alphaMode = v0.alphaMode & 0xFu;
     vec4 albedoValue;
     vec4 specularValue;
     vec4 normalValue;
@@ -155,21 +161,26 @@ void main() {
 
         albedoValue = sampleTexture(textures[nonuniformEXT(textureID)], textureUV, lod, false);
         albedoValue.a = resolveSurfaceAlpha(albedoValue.a * colorLayerValue.a, alphaMode);
-        if (specularTextureID >= 0) {
-            specularValue = sampleTexture(textures[nonuniformEXT(specularTextureID)], textureUV, lod, false);
-        } else {
+        if (useFarFieldFlatMaterial || forceNoPbrMaterial) {
             specularValue = vec4(0.0);
-        }
-        if (normalTextureID >= 0) {
-            normalValue = samplePBRTexture(textures[nonuniformEXT(normalTextureID)], textureUV, atlasUvMin, atlasUvMax,
-                                           lod, pc.pbrSamplingMode);
+            normalValue = vec4(0.5, 0.5, 1.0, 0.0);
         } else {
-            normalValue = vec4(0.0);
+            if (specularTextureID >= 0) {
+                specularValue = sampleTexture(textures[nonuniformEXT(specularTextureID)], textureUV, lod, false);
+            } else {
+                specularValue = vec4(0.0);
+            }
+            if (normalTextureID >= 0) {
+                normalValue = samplePBRTexture(textures[nonuniformEXT(normalTextureID)], textureUV, atlasUvMin,
+                                               atlasUvMax, lod, pc.pbrSamplingMode);
+            } else {
+                normalValue = vec4(0.5, 0.5, 1.0, 0.0);
+            }
         }
     } else {
         albedoValue = vec4(1.0);
         specularValue = vec4(0.0);
-        normalValue = vec4(0.0);
+        normalValue = vec4(0.5, 0.5, 1.0, 0.0);
     }
 
     uint useGlint = v0.useGlint;
@@ -177,12 +188,13 @@ void main() {
     vec2 glintUV = baryCoords.x * v0.glintUV + baryCoords.y * v1.glintUV + baryCoords.z * v2.glintUV;
     glintUV = (worldUbo.textureMat * vec4(glintUV, 0.0, 1.0)).xy;
     vec3 glint =
-        useGlint > 0 ? sampleTexture(textures[nonuniformEXT(glintTexture)], glintUV, false).rgb : vec3(0.0);
+        useGlint > 0 && !useFarFieldFlatMaterial ? sampleTexture(textures[nonuniformEXT(glintTexture)], glintUV, false).rgb
+                                                 : vec3(0.0);
     glint = glint * glint;
 
     uint useOverlay = v0.useOverlay;
     vec3 tint = albedoValue.rgb * colorLayer + glint;
-    if (useOverlay > 0) {
+    if (useOverlay > 0 && !useFarFieldFlatMaterial) {
         ivec2 overlayUV = v0.overlayUV;
         vec4 overlayColor = sampleTexture(textures[nonuniformEXT(worldUbo.overlayTextureID)], overlayUV, 0, false);
         tint = mix(overlayColor.rgb, albedoValue.rgb * colorLayer, overlayColor.a) + glint;
@@ -190,6 +202,13 @@ void main() {
 
     albedoValue = vec4(tint, albedoValue.a);
     LabPBRMat mat = convertLabPBRMaterial(albedoValue, specularValue, normalValue);
+    if (forceNoPbrMaterial) {
+        mat.roughness = max(mat.roughness, 0.92);
+        mat.metallic = 0.0;
+        mat.transmission = 0.0;
+        mat.f0 = vec3(0.04);
+        mat.emission = 0.0;
+    }
 
     // add glowing radiance
     mainRay.radiance += 12 * tint * mat.emission * mainRay.throughput;

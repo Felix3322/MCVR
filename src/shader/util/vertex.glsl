@@ -7,6 +7,7 @@ const uint useColorLayerBit = 1u << 0u;
 const uint useTextureBit = 1u << 1u;
 const uint useOverlayBit = 1u << 2u;
 const uint useGlintBit = 1u << 3u;
+const uint forceNoPbrBit = 1u << 4u;
 const uint alphaModeShift = 8u;
 const uint coordinateShift = 12u;
 
@@ -48,6 +49,10 @@ bool hasOverlay(uint packedData) {
 
 bool hasGlint(uint packedData) {
     return (packedData & useGlintBit) != 0u;
+}
+
+bool forceNoPbr(uint packedData) {
+    return (packedData & forceNoPbrBit) != 0u;
 }
 
 uint getAlphaMode(uint packedData) {

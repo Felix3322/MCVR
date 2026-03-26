@@ -30,11 +30,18 @@ struct RayTracingPushConstant {
     float basicRadiance;
     uint32_t pbrSamplingMode;
     uint32_t transparentSplitMode;
+    float farFieldStartDistanceChunks;
+    uint32_t farFieldMaterialMode;
 };
 
 enum RayTracingTransparentSplitMode {
     RAY_TRACING_TRANSPARENT_SPLIT_MODE_DETERMINISTIC = 0,
     RAY_TRACING_TRANSPARENT_SPLIT_MODE_STOCHASTIC = 1,
+};
+
+enum RayTracingFarFieldMaterialMode {
+    RAY_TRACING_FAR_FIELD_MATERIAL_MODE_FULL_PBR = 0,
+    RAY_TRACING_FAR_FIELD_MATERIAL_MODE_FLAT_SURFACE = 1,
 };
 
 class RayTracingModule : public WorldModule, public SharedObject<RayTracingModule> {
@@ -187,6 +194,8 @@ class RayTracingModule : public WorldModule, public SharedObject<RayTracingModul
     float basicRadiance_ = 0.001f;
     uint32_t pbrSamplingMode_ = 1;
     uint32_t transparentSplitMode_ = RAY_TRACING_TRANSPARENT_SPLIT_MODE_DETERMINISTIC;
+    float farFieldStartDistanceChunks_ = 32.0f;
+    uint32_t farFieldMaterialMode_ = RAY_TRACING_FAR_FIELD_MATERIAL_MODE_FLAT_SURFACE;
     bool useSharc_ = true;
     uint32_t sharcDebugMode_ = 0;
     std::string shaderPackPath_;

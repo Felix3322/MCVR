@@ -4,12 +4,30 @@
 #include "core/render/render_framework.hpp"
 #include "core/render/renderer.hpp"
 
+#include <exception>
 #include <iostream>
 
-JNIEXPORT void JNICALL Java_com_radiance_client_pipeline_Pipeline_buildNative(JNIEnv *, jclass, jlong paramsLongPtr) {
-    WorldPipelineBuildParams *params = reinterpret_cast<WorldPipelineBuildParams *>(paramsLongPtr);
-    auto pipeline = Renderer::instance().framework()->pipeline();
-    if (pipeline != nullptr) Renderer::instance().framework()->pipeline()->buildWorldPipelineBlueprint(params);
+namespace {
+
+void throwJavaRuntimeException(JNIEnv *env, const char *message) {
+    jclass runtimeExceptionClass = env->FindClass("java/lang/RuntimeException");
+    if (runtimeExceptionClass != nullptr) {
+        env->ThrowNew(runtimeExceptionClass, message != nullptr ? message : "Native pipeline build failed");
+    }
+}
+
+} // namespace
+
+JNIEXPORT void JNICALL Java_com_radiance_client_pipeline_Pipeline_buildNative(JNIEnv *env, jclass, jlong paramsLongPtr) {
+    try {
+        WorldPipelineBuildParams *params = reinterpret_cast<WorldPipelineBuildParams *>(paramsLongPtr);
+        auto pipeline = Renderer::instance().framework()->pipeline();
+        if (pipeline != nullptr) Renderer::instance().framework()->pipeline()->buildWorldPipelineBlueprint(params);
+    } catch (const std::exception &e) {
+        throwJavaRuntimeException(env, e.what());
+    } catch (...) {
+        throwJavaRuntimeException(env, "Unknown native exception while building pipeline");
+    }
 }
 
 JNIEXPORT void JNICALL Java_com_radiance_client_pipeline_Pipeline_collectNativeModules(JNIEnv *, jclass) {

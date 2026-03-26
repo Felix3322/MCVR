@@ -69,6 +69,8 @@ layout(push_constant) uniform PushConstant {
     float basicRadiance;
     uint pbrSamplingMode;
     uint transparentSplitMode;
+    float farFieldStartDistanceChunks;
+    uint farFieldMaterialMode;
 }
 pc;
 
@@ -153,12 +155,16 @@ void main() {
 
     vec3 baryCoords = vec3(1.0 - (attribs.x + attribs.y), attribs.x, attribs.y);
     vec3 worldPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
+    bool useFarFieldFlatMaterial =
+        pc.farFieldMaterialMode != 0u &&
+        dot(worldPos, worldPos) >= pow(pc.farFieldStartDistanceChunks * 16.0, 2.0);
 
     uint packedData = m0.packedData;
     bool useColorLayer = hasColorLayer(packedData);
     bool useTexture = hasTexture(packedData);
     bool useGlint = hasGlint(packedData);
     bool useOverlay = hasOverlay(packedData);
+    bool forceNoPbrMaterial = forceNoPbr(packedData);
     vec4 colorLayerValue = useColorLayer ?
                                baryCoords.x * m0.colorLayer + baryCoords.y * m1.colorLayer + baryCoords.z * m2.colorLayer :
                                vec4(1.0);
@@ -191,17 +197,22 @@ void main() {
 
         albedoValue = sampleTexture(textures[nonuniformEXT(textureID)], textureUV, lod, false);
         albedoValue.a = resolveSurfaceAlpha(albedoValue.a * colorLayerValue.a, alphaMode);
-        specularValue = textureMap.specular >= 0 ?
-                            sampleTexture(textures[nonuniformEXT(textureMap.specular)], textureUV, lod, false) :
-                            vec4(0.0);
-        normalValue = textureMap.normal >= 0 ?
-                          samplePBRTexture(textures[nonuniformEXT(textureMap.normal)], textureUV, atlasUvMin, atlasUvMax,
-                                           lod, pc.pbrSamplingMode) :
-                          vec4(0.0);
+        if (useFarFieldFlatMaterial || forceNoPbrMaterial) {
+            specularValue = vec4(0.0);
+            normalValue = vec4(0.5, 0.5, 1.0, 0.0);
+        } else {
+            specularValue = textureMap.specular >= 0 ?
+                                sampleTexture(textures[nonuniformEXT(textureMap.specular)], textureUV, lod, false) :
+                                vec4(0.0);
+            normalValue = textureMap.normal >= 0 ? samplePBRTexture(textures[nonuniformEXT(textureMap.normal)],
+                                                                     textureUV, atlasUvMin, atlasUvMax, lod,
+                                                                     pc.pbrSamplingMode) :
+                                                   vec4(0.0);
+        }
     } else {
         albedoValue = vec4(1.0);
         specularValue = vec4(0.0);
-        normalValue = vec4(0.0);
+        normalValue = vec4(0.5, 0.5, 1.0, 0.0);
     }
 
     mainRay.hitT = gl_HitTEXT;
@@ -217,7 +228,7 @@ void main() {
     }
 
     vec3 glint = vec3(0.0);
-    if (useGlint) {
+    if (useGlint && !useFarFieldFlatMaterial) {
         vec2 glintUV = baryCoords.x * m0.glintUV + baryCoords.y * m1.glintUV + baryCoords.z * m2.glintUV;
         glintUV = (worldUbo.textureMat * vec4(glintUV, 0.0, 1.0)).xy;
         glint = sampleTexture(textures[nonuniformEXT(m0.glintTexture)], glintUV, false).rgb;
@@ -225,13 +236,20 @@ void main() {
     glint *= glint;
 
     vec3 tint = albedoValue.rgb * colorLayer + glint;
-    if (useOverlay) {
+    if (useOverlay && !useFarFieldFlatMaterial) {
         vec4 overlayColor = sampleTexture(textures[nonuniformEXT(worldUbo.overlayTextureID)], m0.overlayUV, 0, false);
         tint = mix(overlayColor.rgb, albedoValue.rgb * colorLayer, overlayColor.a) + glint;
     }
 
     albedoValue = vec4(tint, albedoValue.a);
     LabPBRMat mat = convertLabPBRMaterial(albedoValue, specularValue, normalValue);
+    if (forceNoPbrMaterial) {
+        mat.roughness = max(mat.roughness, 0.92);
+        mat.metallic = 0.0;
+        mat.transmission = 0.0;
+        mat.f0 = vec3(0.04);
+        mat.emission = 0.0;
+    }
 
     if (!hasPositions) {
         loadTrianglePositions(geometryBufferIndex, i0, i1, i2, p0, p1, p2);

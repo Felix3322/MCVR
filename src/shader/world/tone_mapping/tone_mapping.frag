@@ -35,7 +35,8 @@ layout(push_constant) uniform PushConstant {
     int clampOutput;
     int exposureMeteringMode;
     float centerMeteringPercent;
-    float padding0;
+    float hdrHeadroom;
+    int outputMode;
     float padding1;
     float padding2;
 }
@@ -132,11 +133,20 @@ void main() {
     exposure *= exp2(pc.exposureBias);
 
     vec3 expColor = max(hdr * max(exposure, 0.0), vec3(0.0));
-    vec3 mapped = applyToneMapping(expColor);
-    mapped = max(mapped, vec3(0.0));
-    mapped = applySaturation(mapped, max(pc.saturation, 0.0));
-    mapped = pow(mapped, vec3(1.0 / 2.2));
-    if (pc.clampOutput != 0) mapped = clamp(mapped, vec3(0.0), vec3(1.0));
+    vec3 mapped;
+    if (pc.outputMode == 1) {
+        float hdrHeadroom = max(pc.hdrHeadroom, 1.0);
+        mapped = applyToneMapping(expColor / hdrHeadroom) * hdrHeadroom;
+        mapped = max(mapped, vec3(0.0));
+        mapped = applySaturation(mapped, max(pc.saturation, 0.0));
+        if (pc.clampOutput != 0) mapped = clamp(mapped, vec3(0.0), vec3(hdrHeadroom));
+    } else {
+        mapped = applyToneMapping(expColor);
+        mapped = max(mapped, vec3(0.0));
+        mapped = applySaturation(mapped, max(pc.saturation, 0.0));
+        mapped = pow(mapped, vec3(1.0 / 2.2));
+        if (pc.clampOutput != 0) mapped = clamp(mapped, vec3(0.0), vec3(1.0));
+    }
 
     fragColor = vec4(mapped, 1.0);
 }

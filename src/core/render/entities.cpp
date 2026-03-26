@@ -15,6 +15,7 @@ using Vertex = glm::vec3;
 using Triangle = std::array<Vertex, 3>;
 using VertexIdentifier = std::array<uint32_t, 2>;
 using TriangleIdentifier = std::array<VertexIdentifier, 3>;
+using PBRVertex = vk::VertexFormat::PBRVertex;
 
 struct TriangleHash {
     static inline void hash_combine(std::size_t &seed, std::size_t h) noexcept {
@@ -27,6 +28,90 @@ struct TriangleHash {
         return seed;
     }
 };
+
+namespace {
+constexpr int PARTICLE_RAY_TRACING_FLAG = 0b00100000;
+constexpr float MIN_PARTICLE_VOLUME_THICKNESS = 0.015f;
+constexpr float MAX_PARTICLE_VOLUME_THICKNESS = 0.09f;
+constexpr float PARTICLE_VOLUME_EPSILON = 1.0e-6f;
+
+glm::vec3 computeParticleQuadNormal(const std::array<PBRVertex, 4> &quad) {
+    glm::vec3 edgeA = quad[1].pos - quad[0].pos;
+    glm::vec3 edgeB = quad[3].pos - quad[0].pos;
+    glm::vec3 normal = glm::cross(edgeA, edgeB);
+    if (glm::length(normal) <= PARTICLE_VOLUME_EPSILON) {
+        normal = glm::cross(quad[2].pos - quad[0].pos, quad[1].pos - quad[0].pos);
+    }
+    if (glm::length(normal) <= PARTICLE_VOLUME_EPSILON) { return {0.0f, 0.0f, 1.0f}; }
+    return glm::normalize(normal);
+}
+
+float particleVolumeThickness(const std::array<PBRVertex, 4> &quad) {
+    float width = glm::length(quad[1].pos - quad[0].pos);
+    float height = glm::length(quad[3].pos - quad[0].pos);
+    float avgSpan = std::max(0.001f, 0.5f * (width + height));
+
+    float avgEmission = 0.0f;
+    float avgAlpha = 0.0f;
+    for (const auto &vertex : quad) {
+        avgEmission += vertex.albedoEmission;
+        avgAlpha += vertex.useColorLayer > 0 ? vertex.colorLayer.a : 1.0f;
+    }
+    avgEmission /= 4.0f;
+    avgAlpha /= 4.0f;
+
+    float emissionFactor = std::clamp(avgEmission, 0.0f, 1.6f);
+    float alphaFactor = std::clamp(avgAlpha, 0.35f, 1.0f);
+    float thickness =
+        avgSpan * (0.08f + 0.04f * emissionFactor) * (0.7f + 0.3f * alphaFactor);
+    float dynamicMaxThickness = std::max(MIN_PARTICLE_VOLUME_THICKNESS, avgSpan * 0.35f);
+    return std::clamp(thickness, MIN_PARTICLE_VOLUME_THICKNESS,
+                      std::min(MAX_PARTICLE_VOLUME_THICKNESS, dynamicMaxThickness));
+}
+
+void finalizeParticleVertex(PBRVertex &vertex, World::Coordinates coordinate, bool post, double x, double y,
+                            double z) {
+    vertex.coordinate = coordinate;
+    if (post) { vertex.postBase = {x, y, z}; }
+}
+
+void appendParticlePrism(const std::array<PBRVertex, 4> &quad,
+                         std::vector<PBRVertex> &geometryVertices,
+                         std::vector<uint32_t> &geometryIndices,
+                         World::Coordinates coordinate,
+                         bool post,
+                         double x,
+                         double y,
+                         double z) {
+    glm::vec3 normal = computeParticleQuadNormal(quad);
+    float halfThickness = particleVolumeThickness(quad) * 0.5f;
+    glm::vec3 offset = normal * halfThickness;
+
+    uint32_t baseIndex = static_cast<uint32_t>(geometryVertices.size());
+    std::array<PBRVertex, 8> prismVertices{};
+    for (int i = 0; i < 4; ++i) {
+        prismVertices[i] = quad[i];
+        prismVertices[i].pos += offset;
+        finalizeParticleVertex(prismVertices[i], coordinate, post, x, y, z);
+
+        prismVertices[4 + i] = quad[i];
+        prismVertices[4 + i].pos -= offset;
+        finalizeParticleVertex(prismVertices[4 + i], coordinate, post, x, y, z);
+    }
+
+    geometryVertices.insert(geometryVertices.end(), prismVertices.begin(), prismVertices.end());
+
+    static constexpr std::array<uint32_t, 36> prismIndices = {
+        0, 1, 2, 2, 3, 0, // front
+        4, 7, 6, 6, 5, 4, // back
+        0, 4, 5, 5, 1, 0, // side
+        1, 5, 6, 6, 2, 1, // side
+        2, 6, 7, 7, 3, 2, // side
+        3, 7, 4, 4, 0, 3  // side
+    };
+    for (uint32_t prismIndex : prismIndices) { geometryIndices.push_back(baseIndex + prismIndex); }
+}
+} // namespace
 
 
 EntityBuildData::EntityBuildData(int hashCode,
@@ -674,42 +759,79 @@ void Entities::queueBuild(EntitiesBuildTask task) {
 
             switch (static_cast<World::DrawMode>(task.indexFormats[geometryIndex + i])) {
                 case World::DrawMode::QUADS: {
-                    for (int j = 0; j < task.vertexCounts[geometryIndex + i]; j += 4) {
-                        geometryIndices.push_back(j + 0);
-                        geometryIndices.push_back(j + 1);
-                        geometryIndices.push_back(j + 2);
-                        geometryIndices.push_back(j + 2);
-                        geometryIndices.push_back(j + 3);
-                        geometryIndices.push_back(j + 0);
+                    bool approximateParticleVolume = (rayTracingFlag & PARTICLE_RAY_TRACING_FLAG) != 0;
+                    if (approximateParticleVolume) {
+                        std::vector<PBRVertex> particleVolumeVertices;
+                        std::vector<uint32_t> particleVolumeIndices;
+                        particleVolumeVertices.reserve((task.vertexCounts[geometryIndex + i] / 4) * 8);
+                        particleVolumeIndices.reserve((task.vertexCounts[geometryIndex + i] / 4) * 36);
 
-                        if (task.normalOffset) {
-                            if (geometryVertices[j + 0].useNorm)
-                                geometryVertices[j + 0].pos += 0.00001f * glm::normalize(geometryVertices[j + 0].norm);
-                            if (geometryVertices[j + 1].useNorm)
-                                geometryVertices[j + 1].pos += 0.00001f * glm::normalize(geometryVertices[j + 1].norm);
-                            if (geometryVertices[j + 2].useNorm)
-                                geometryVertices[j + 2].pos += 0.00001f * glm::normalize(geometryVertices[j + 2].norm);
-                            if (geometryVertices[j + 3].useNorm)
-                                geometryVertices[j + 3].pos += 0.00001f * glm::normalize(geometryVertices[j + 3].norm);
+                        for (int j = 0; j < task.vertexCounts[geometryIndex + i]; j += 4) {
+                            std::array<PBRVertex, 4> quad = {
+                                geometryVertices[j + 0],
+                                geometryVertices[j + 1],
+                                geometryVertices[j + 2],
+                                geometryVertices[j + 3],
+                            };
+
+                            if (task.normalOffset) {
+                                if (quad[0].useNorm) { quad[0].pos += 0.00001f * glm::normalize(quad[0].norm); }
+                                if (quad[1].useNorm) { quad[1].pos += 0.00001f * glm::normalize(quad[1].norm); }
+                                if (quad[2].useNorm) { quad[2].pos += 0.00001f * glm::normalize(quad[2].norm); }
+                                if (quad[3].useNorm) { quad[3].pos += 0.00001f * glm::normalize(quad[3].norm); }
+                            }
+
+                            appendParticlePrism(quad, particleVolumeVertices, particleVolumeIndices, coordinate, post, x,
+                                                y, z);
+
+                            if (quad[3].useTexture) {
+                                textureIDs.insert(quad[0].textureID);
+                                textureIDs.insert(quad[1].textureID);
+                                textureIDs.insert(quad[2].textureID);
+                                textureIDs.insert(quad[3].textureID);
+                            }
                         }
 
-                        geometryVertices[j + 0].coordinate = coordinate;
-                        geometryVertices[j + 1].coordinate = coordinate;
-                        geometryVertices[j + 2].coordinate = coordinate;
-                        geometryVertices[j + 3].coordinate = coordinate;
+                        geometryVertices = std::move(particleVolumeVertices);
+                        geometryIndices = std::move(particleVolumeIndices);
+                    } else {
+                        for (int j = 0; j < task.vertexCounts[geometryIndex + i]; j += 4) {
+                            geometryIndices.push_back(j + 0);
+                            geometryIndices.push_back(j + 1);
+                            geometryIndices.push_back(j + 2);
+                            geometryIndices.push_back(j + 2);
+                            geometryIndices.push_back(j + 3);
+                            geometryIndices.push_back(j + 0);
 
-                        if (post) {
-                            geometryVertices[j + 0].postBase = {x, y, z};
-                            geometryVertices[j + 1].postBase = {x, y, z};
-                            geometryVertices[j + 2].postBase = {x, y, z};
-                            geometryVertices[j + 3].postBase = {x, y, z};
-                        }
+                            if (task.normalOffset) {
+                                if (geometryVertices[j + 0].useNorm)
+                                    geometryVertices[j + 0].pos += 0.00001f * glm::normalize(geometryVertices[j + 0].norm);
+                                if (geometryVertices[j + 1].useNorm)
+                                    geometryVertices[j + 1].pos += 0.00001f * glm::normalize(geometryVertices[j + 1].norm);
+                                if (geometryVertices[j + 2].useNorm)
+                                    geometryVertices[j + 2].pos += 0.00001f * glm::normalize(geometryVertices[j + 2].norm);
+                                if (geometryVertices[j + 3].useNorm)
+                                    geometryVertices[j + 3].pos += 0.00001f * glm::normalize(geometryVertices[j + 3].norm);
+                            }
 
-                        if (geometryVertices[j + 3].useTexture) {
-                            textureIDs.insert(geometryVertices[j + 0].textureID);
-                            textureIDs.insert(geometryVertices[j + 1].textureID);
-                            textureIDs.insert(geometryVertices[j + 2].textureID);
-                            textureIDs.insert(geometryVertices[j + 3].textureID);
+                            geometryVertices[j + 0].coordinate = coordinate;
+                            geometryVertices[j + 1].coordinate = coordinate;
+                            geometryVertices[j + 2].coordinate = coordinate;
+                            geometryVertices[j + 3].coordinate = coordinate;
+
+                            if (post) {
+                                geometryVertices[j + 0].postBase = {x, y, z};
+                                geometryVertices[j + 1].postBase = {x, y, z};
+                                geometryVertices[j + 2].postBase = {x, y, z};
+                                geometryVertices[j + 3].postBase = {x, y, z};
+                            }
+
+                            if (geometryVertices[j + 3].useTexture) {
+                                textureIDs.insert(geometryVertices[j + 0].textureID);
+                                textureIDs.insert(geometryVertices[j + 1].textureID);
+                                textureIDs.insert(geometryVertices[j + 2].textureID);
+                                textureIDs.insert(geometryVertices[j + 3].textureID);
+                            }
                         }
                     }
 

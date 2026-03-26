@@ -30,6 +30,21 @@ JNIEXPORT void JNICALL Java_com_radiance_client_option_Options_nativeSetVsync(JN
     if (write) Renderer::options.needRecreate = true;
 }
 
+JNIEXPORT void JNICALL Java_com_radiance_client_option_Options_nativeSetHdrOutput(JNIEnv *,
+                                                                                  jclass,
+                                                                                  jboolean hdrOutput,
+                                                                                  jboolean write) {
+    Renderer::options.hdrOutput = hdrOutput;
+    if (write) Renderer::options.needRecreate = true;
+}
+
+JNIEXPORT void JNICALL Java_com_radiance_client_option_Options_nativeSetRayBounces(JNIEnv *,
+                                                                                   jclass,
+                                                                                   jint rayBounces,
+                                                                                   jboolean write) {
+    Renderer::options.rayBounces = rayBounces;
+}
+
 JNIEXPORT void JNICALL Java_com_radiance_client_option_Options_nativeSetChunkBuildingBatchSize(
     JNIEnv *, jclass, jint chunkBuildingBatchSize, jboolean write) {
     Renderer::options.chunkBuildingBatchSize = chunkBuildingBatchSize;

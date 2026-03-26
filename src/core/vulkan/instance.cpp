@@ -118,6 +118,7 @@ vk::Instance::Instance() {
     // dynamic vertex input state ext
     // repeated for dlss, but make sure
     extStorage.insert(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+    extStorage.insert(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
 
 #ifdef DEBUG
     extStorage.insert(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);

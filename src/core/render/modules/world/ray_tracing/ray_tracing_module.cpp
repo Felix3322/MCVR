@@ -130,6 +130,13 @@ void RayTracingModule::setAttributes(int attributeCount, std::vector<std::string
         }
         return RAY_TRACING_TRANSPARENT_SPLIT_MODE_DETERMINISTIC;
     };
+    auto parseFarFieldMaterialMode = [](const std::string &value) -> uint32_t {
+        if (value == "render_pipeline.module.ray_tracing.attribute.far_field_material_mode.flat_surface" ||
+            value == "flat_surface") {
+            return RAY_TRACING_FAR_FIELD_MATERIAL_MODE_FLAT_SURFACE;
+        }
+        return RAY_TRACING_FAR_FIELD_MATERIAL_MODE_FULL_PBR;
+    };
     auto parseFloat = [](const std::string &value, float fallback) -> float {
         try {
             return std::stof(value);
@@ -179,6 +186,10 @@ void RayTracingModule::setAttributes(int attributeCount, std::vector<std::string
             pbrSamplingMode_ = parsePbrSamplingMode(value);
         } else if (key == "render_pipeline.module.ray_tracing.attribute.transparent_split_mode") {
             transparentSplitMode_ = parseTransparentSplitMode(value);
+        } else if (key == "render_pipeline.module.ray_tracing.attribute.far_field_start_distance_chunks") {
+            farFieldStartDistanceChunks_ = std::max(0.0f, parseFloat(value, farFieldStartDistanceChunks_));
+        } else if (key == "render_pipeline.module.ray_tracing.attribute.far_field_material_mode") {
+            farFieldMaterialMode_ = parseFarFieldMaterialMode(value);
         } else if (key == "render_pipeline.module.ray_tracing.attribute.atmosphere_planet_radius") {
             if (atmosphere_ != nullptr) {
                 atmosphere_->setPlanetRadius(std::max(1.0f, parseFloat(value, 6360.0f) * distanceScale));
@@ -1318,6 +1329,8 @@ void RayTracingModuleContext::render() {
         .basicRadiance = module->basicRadiance_,
         .pbrSamplingMode = module->pbrSamplingMode_,
         .transparentSplitMode = module->transparentSplitMode_,
+        .farFieldStartDistanceChunks = module->farFieldStartDistanceChunks_,
+        .farFieldMaterialMode = module->farFieldMaterialMode_,
     };
     vkCmdPushConstants(worldCommandBuffer->vkCommandBuffer(), rayTracingDescriptorTable->vkPipelineLayout(),
                        VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR |

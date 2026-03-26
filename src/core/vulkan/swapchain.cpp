@@ -36,6 +36,21 @@ VkSurfaceFormatKHR chooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR> &av
         return {VK_FORMAT_R8G8B8A8_UNORM, VK_COLORSPACE_SRGB_NONLINEAR_KHR};
     }
 
+    if (Renderer::options.hdrOutput) {
+        for (const auto &availableFormat : availableFormats) {
+            if (availableFormat.format == VK_FORMAT_R16G16B16A16_SFLOAT &&
+                availableFormat.colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT) {
+#ifdef DEBUG
+                std::cout << "selected HDR surface format: " << availableFormat.format
+                          << " color space: " << availableFormat.colorSpace << std::endl;
+#endif
+                return availableFormat;
+            }
+        }
+        swapchainCerr() << "requested HDR output, but scRGB swapchain format is unavailable; falling back to SDR"
+                        << std::endl;
+    }
+
     auto formatRank = [](VkFormat format) {
         switch (format) {
             case VK_FORMAT_R8G8B8A8_UNORM: return 0;
@@ -262,4 +277,9 @@ std::vector<std::shared_ptr<vk::SwapchainImage>> &vk::Swapchain::swapchainImages
 
 uint32_t vk::Swapchain::imageCount() {
     return imageCount_;
+}
+
+bool vk::Swapchain::isHdrOutputActive() const {
+    return surfaceFormat_.format == VK_FORMAT_R16G16B16A16_SFLOAT &&
+           surfaceFormat_.colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT;
 }

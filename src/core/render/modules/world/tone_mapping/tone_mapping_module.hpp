@@ -37,6 +37,11 @@ enum ToneMappingExposureMeteringMode : int32_t {
     TONE_MAPPING_EXPOSURE_METERING_MODE_CENTER = 1,
 };
 
+enum ToneMappingOutputMode : int32_t {
+    TONE_MAPPING_OUTPUT_MODE_LDR_SRGB = 0,
+    TONE_MAPPING_OUTPUT_MODE_HDR_SCRGB = 1,
+};
+
 struct ToneMappingModulePushConstant {
     float log2Min;
     float log2Max;
@@ -58,7 +63,8 @@ struct ToneMappingModulePushConstant {
     int clampOutput;
     int exposureMeteringMode;
     float centerMeteringPercent;
-    float padding0;
+    float hdrHeadroom;
+    int outputMode;
     float padding1;
     float padding2;
 };

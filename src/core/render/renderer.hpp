@@ -19,6 +19,7 @@ struct Options {
     uint32_t upscalerType = 1;
     uint32_t upscalerQuality = 0;
     uint32_t denoiserMode = 1;
+    bool hdrOutput = false;
     uint32_t rayBounces = 4;
     uint32_t debugMode = 0;
     bool needRecreate = false;
