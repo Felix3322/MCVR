@@ -89,8 +89,12 @@ layout(push_constant) uniform PushConstant {
     uint transparentSplitMode;
     float farFieldStartDistanceChunks;
     uint farFieldMaterialMode;
+    uint flags;
 }
 pc;
+
+#define SIMPLIFIED_INDIRECT ((pc.flags & 1u) != 0u)
+#define SIMPLIFY_THIS_RAY (SIMPLIFIED_INDIRECT && rayBounce(mainRay) > 1u)
 
 layout(location = 0) rayPayloadInEXT MainRay mainRay;
 hitAttributeEXT vec2 attribs;
@@ -169,7 +173,7 @@ void main() {
             specularValue = vec4(0.0);
             normalValue = vec4(0.5, 0.5, 1.0, 0.0);
         } else {
-            if (specularTextureID >= 0) {
+            if (!SIMPLIFY_THIS_RAY && specularTextureID >= 0) {
                 specularValue = sampleTexture(textures[nonuniformEXT(specularTextureID)], textureUV, detailLod, false);
             } else {
                 specularValue = vec4(0.0);
@@ -191,14 +195,14 @@ void main() {
     uint glintTexture = v0.glintTexture;
     vec2 glintUV = baryCoords.x * v0.glintUV + baryCoords.y * v1.glintUV + baryCoords.z * v2.glintUV;
     glintUV = (worldUbo.textureMat * vec4(glintUV, 0.0, 1.0)).xy;
-    vec3 glint =
-        useGlint > 0 && !useFarFieldFlatMaterial ? sampleTexture(textures[nonuniformEXT(glintTexture)], glintUV, false).rgb
-                                                 : vec3(0.0);
+    vec3 glint = useGlint > 0 && !useFarFieldFlatMaterial && !SIMPLIFY_THIS_RAY ?
+        sampleTexture(textures[nonuniformEXT(glintTexture)], glintUV, false).rgb :
+        vec3(0.0);
     glint = glint * glint;
 
     uint useOverlay = v0.useOverlay;
     vec3 tint = albedoValue.rgb * colorLayer + glint;
-    if (useOverlay > 0 && !useFarFieldFlatMaterial) {
+    if (useOverlay > 0 && !useFarFieldFlatMaterial && !SIMPLIFY_THIS_RAY) {
         ivec2 overlayUV = v0.overlayUV;
         vec4 overlayColor = sampleTexture(textures[nonuniformEXT(worldUbo.overlayTextureID)], overlayUV, 0, false);
         tint = mix(overlayColor.rgb, albedoValue.rgb * colorLayer, overlayColor.a) + glint;

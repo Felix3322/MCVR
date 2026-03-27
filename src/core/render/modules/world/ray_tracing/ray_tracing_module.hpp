@@ -32,6 +32,7 @@ struct RayTracingPushConstant {
     uint32_t transparentSplitMode;
     float farFieldStartDistanceChunks;
     uint32_t farFieldMaterialMode;
+    uint32_t flags;
 };
 
 enum RayTracingTransparentSplitMode {

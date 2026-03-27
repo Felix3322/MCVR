@@ -17,6 +17,7 @@ Textures::Textures(std::shared_ptr<Framework> framework) {}
 
 void Textures::reset() {
     textures_.clear();
+    textureAlphaClass_.clear();
     nextID = 0;
 }
 
@@ -278,6 +279,11 @@ void Textures::bindAllTextures() {
 
         Renderer::instance().framework()->pipeline()->bindTexture(samplers[id], texture, id);
     }
+}
+
+void Textures::setTextureAlphaClass(uint32_t id, AlphaClass alphaClass) {
+    std::scoped_lock lck(mtx_);
+    textureAlphaClass_[id] = alphaClass;
 }
 
 ImageBufferCache::ImageBufferCache(std::shared_ptr<vk::VMA> vma, std::shared_ptr<vk::Device> device, uint32_t frameNum)

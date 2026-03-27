@@ -71,6 +71,7 @@ layout(push_constant) uniform PushConstant {
     uint transparentSplitMode;
     float farFieldStartDistanceChunks;
     uint farFieldMaterialMode;
+    uint flags;
 }
 pc;
 
@@ -281,6 +282,7 @@ void main() {
                 shadowRay.radiance = vec3(0.0);
                 shadowRay.throughput = vec3(1.0);
                 shadowRay.insideBoat = rayInsideBoat(mainRay) ? 1u : 0u;
+                shadowRay.bounceIndex = bounce;
 
                 traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT, WORLD_MASK | PLAYER_MASK | CLOUD_MASK, 0, 0, 0, shadowRayOrigin,
                             0.0001, sampledLightDir, 1000.0, 1);

@@ -63,4 +63,13 @@ JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_TextureProxy_perfor
     if (textures == nullptr) return;
     textures->performQueuedUpload();
 }
+
+JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_TextureProxy_setTextureAlphaClass(JNIEnv *,
+                                                                                                jclass,
+                                                                                                jint id,
+                                                                                                jint alphaClass) {
+    auto textures = Renderer::instance().textures();
+    if (textures == nullptr) return;
+    textures->setTextureAlphaClass(id, static_cast<Textures::AlphaClass>(alphaClass));
+}
 }

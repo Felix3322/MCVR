@@ -1360,6 +1360,7 @@ void RayTracingModuleContext::render() {
         .transparentSplitMode = module->transparentSplitMode_,
         .farFieldStartDistanceChunks = module->farFieldStartDistanceChunks_,
         .farFieldMaterialMode = module->farFieldMaterialMode_,
+        .flags = Renderer::options.simplifiedIndirect ? 1u : 0u,
     };
     vkCmdPushConstants(worldCommandBuffer->vkCommandBuffer(), rayTracingDescriptorTable->vkPipelineLayout(),
                        VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR |

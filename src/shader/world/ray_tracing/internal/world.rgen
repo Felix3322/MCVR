@@ -129,6 +129,7 @@ layout(push_constant) uniform PushConstant {
     float basicRadiance;
     uint pbrSamplingMode;
     uint transparentSplitMode;
+    uint flags;
 }
 pc;
 

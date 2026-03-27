@@ -47,7 +47,7 @@ struct ShadowRay {
     T_VEC3 radiance;
     T_VEC3 throughput;
     T_UINT insideBoat;
-    T_UINT pad0;
+    T_UINT bounceIndex;
     T_UINT pad1;
 };
 

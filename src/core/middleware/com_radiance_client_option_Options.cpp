@@ -152,6 +152,11 @@ extern "C" JNIEXPORT void JNICALL Java_com_radiance_client_option_Options_native
     if (write) Renderer::options.needRecreate = true;
 }
 
+extern "C" JNIEXPORT void JNICALL Java_com_radiance_client_option_Options_nativeSetSimplifiedIndirect(
+    JNIEnv *, jclass, jboolean enabled, jboolean write) {
+    Renderer::options.simplifiedIndirect = enabled;
+}
+
 extern "C" JNIEXPORT jboolean JNICALL Java_com_radiance_client_option_Options_nativeIsReflexSupported(
     JNIEnv *, jclass) {
     return StreamlineContext::isReflexAvailable() ? JNI_TRUE : JNI_FALSE;

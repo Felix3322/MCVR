@@ -41,6 +41,22 @@ indexBuffer;
 
 #include "util/vertex.glsl"
 
+layout(push_constant) uniform PushConstant {
+    int numRayBounces;
+    float directLightStrength;
+    float indirectLightStrength;
+    float basicRadiance;
+    uint pbrSamplingMode;
+    uint transparentSplitMode;
+    float farFieldStartDistanceChunks;
+    uint farFieldMaterialMode;
+    uint flags;
+}
+pc;
+
+#define SIMPLIFIED_INDIRECT ((pc.flags & 1u) != 0u)
+#define SIMPLIFY_THIS_RAY (SIMPLIFIED_INDIRECT && shadowRay.bounceIndex > 1u)
+
 layout(location = 1) rayPayloadInEXT ShadowRay shadowRay;
 hitAttributeEXT vec2 attribs;
 
@@ -97,31 +113,38 @@ void main() {
     }
 
     vec4 specular = vec4(0.0);
-    if (hasTexture(packedData)) {
+    if (!SIMPLIFY_THIS_RAY && hasTexture(packedData)) {
         int specularTextureID = mapping.entries[textureID].specular;
         if (specularTextureID >= 0) {
             specular = sampleTexture(textures[nonuniformEXT(specularTextureID)], textureUV, false);
         }
     }
 
-    vec2 glintUV = baryCoords.x * m0.glintUV + baryCoords.y * m1.glintUV + baryCoords.z * m2.glintUV;
-    glintUV = (ubo.textureMat * vec4(glintUV, 0.0, 1.0)).xy;
-    vec3 glint = hasGlint(packedData) ? sampleTexture(textures[nonuniformEXT(m0.glintTexture)], glintUV, false).rgb :
-                                          vec3(0.0);
-    glint *= glint;
-
     vec3 tint = shadedAlbedo.rgb;
-    if (hasOverlay(packedData)) {
-        vec4 overlayColor = sampleTexture(textures[nonuniformEXT(ubo.overlayTextureID)], m0.overlayUV, 0, false);
-        tint = mix(overlayColor.rgb, tint, overlayColor.a) + glint;
-    } else {
-        tint += glint;
+    if (!SIMPLIFY_THIS_RAY) {
+        vec2 glintUV = baryCoords.x * m0.glintUV + baryCoords.y * m1.glintUV + baryCoords.z * m2.glintUV;
+        glintUV = (ubo.textureMat * vec4(glintUV, 0.0, 1.0)).xy;
+        vec3 glint = hasGlint(packedData) ?
+            sampleTexture(textures[nonuniformEXT(m0.glintTexture)], glintUV, false).rgb :
+            vec3(0.0);
+        glint *= glint;
+
+        if (hasOverlay(packedData)) {
+            vec4 overlayColor = sampleTexture(textures[nonuniformEXT(ubo.overlayTextureID)], m0.overlayUV, 0, false);
+            tint = mix(overlayColor.rgb, tint, overlayColor.a) + glint;
+        } else {
+            tint += glint;
+        }
     }
     shadedAlbedo.a = alpha;
 
-    LabPBRMat mat = convertLabPBRMaterial(shadedAlbedo, specular, vec4(0.0));
+    bool hasTransmission = alpha < 0.95;
+    if (!SIMPLIFY_THIS_RAY) {
+        LabPBRMat mat = convertLabPBRMaterial(shadedAlbedo, specular, vec4(0.0));
+        hasTransmission = mat.transmission > 0.0 || alpha < 0.95;
+    }
 
-    if (mat.transmission > 0.0 || alpha < 0.95) {
+    if (hasTransmission) {
         vec3 shadowTransmission = clamp(mix(vec3(1.0), tint, alpha), vec3(0.0), vec3(1.0));
         shadowRay.throughput *= shadowTransmission;
         ignoreIntersectionEXT;

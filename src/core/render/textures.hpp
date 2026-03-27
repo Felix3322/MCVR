@@ -14,6 +14,8 @@ class ImageBufferCache;
 
 class Textures : public SharedObject<Textures> {
   public:
+    enum class AlphaClass : int32_t { FULLY_OPAQUE = 0, FULLY_TRANSPARENT = 1, MIXED = 2 };
+
     Textures(std::shared_ptr<Framework> framework);
 
     void reset();
@@ -35,6 +37,7 @@ class Textures : public SharedObject<Textures> {
                      uint32_t level);
     void performQueuedUpload();
     void bindAllTextures();
+    void setTextureAlphaClass(uint32_t id, AlphaClass alphaClass);
 
   private:
     std::map<uint32_t, std::shared_ptr<vk::DeviceLocalImage>> textures_;
@@ -44,6 +47,7 @@ class Textures : public SharedObject<Textures> {
 
     std::map<uint32_t, std::shared_ptr<ImageBufferCache>> caches_;
     std::shared_ptr<std::map<uint32_t, std::vector<VkBufferImageCopy>>> uploadQueue_;
+    std::map<uint32_t, AlphaClass> textureAlphaClass_;
 };
 
 class ImageBufferCache : public SharedObject<ImageBufferCache> {
