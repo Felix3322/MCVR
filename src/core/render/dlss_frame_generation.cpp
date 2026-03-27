@@ -4,6 +4,7 @@
 #include "core/render/pipeline.hpp"
 #include "core/render/render_framework.hpp"
 #include "core/render/renderer.hpp"
+#include "core/render/world.hpp"
 #include "core/vulkan/buffer.hpp"
 #include "core/vulkan/command.hpp"
 #include "core/vulkan/descriptor.hpp"
@@ -363,8 +364,16 @@ bool DlssFrameGenerationController::present(std::shared_ptr<FrameworkContext> co
         return false;
     }
 
+    auto world = Renderer::instance().world();
+    if (world == nullptr || !world->shouldRender()) {
+        return false;
+    }
+
     auto framework = framework_.lock();
     if (!framework || !framework->isRunning() || !ngxContext_ || !ngxContext_->isInitialized()) { return false; }
+    if (framework->device() == nullptr || framework->swapchain() == nullptr || context->commandProcessedSemaphore == nullptr) {
+        return false;
+    }
 
     auto worldPipelineContext = pipelineContext->worldPipelineContext;
     auto hudlessImage = worldPipelineContext->outputImage;

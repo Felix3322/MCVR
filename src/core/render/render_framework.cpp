@@ -293,31 +293,40 @@ void Framework::acquireContext() {
 void Framework::submitCommand() {
     if (!running_) return;
 
-    Renderer::instance().framework()->safeAcquireCurrentContext(); // ensure context is non nullptr
+    auto context = safeAcquireCurrentContext();
+    if (!running_ || context == nullptr || device_ == nullptr || pipeline_ == nullptr ||
+        context->imageAcquiredSemaphore == nullptr || context->commandProcessedSemaphore == nullptr) {
+        return;
+    }
 
     Renderer::instance().textures()->performQueuedUpload();
     Renderer::instance().buffers()->performQueuedUpload();
     Renderer::instance().buffers()->buildAndUploadOverlayUniformBuffer();
 
-    auto pipelineContext = pipeline_->acquirePipelineContext(currentContext_);
-    if (Renderer::instance().world()->shouldRender()) pipelineContext->worldPipelineContext->render();
+    auto pipelineContext = pipeline_->acquirePipelineContext(context);
+    if (pipelineContext == nullptr || pipelineContext->uiModuleContext == nullptr) {
+        return;
+    }
+    if (Renderer::instance().world()->shouldRender() && pipelineContext->worldPipelineContext != nullptr) {
+        pipelineContext->worldPipelineContext->render();
+    }
     pipelineContext->uiModuleContext->end();
 
-    currentContext_->fuseFinal();
+    context->fuseFinal();
 
-    currentContext_->uploadCommandBuffer->end();
-    currentContext_->worldCommandBuffer->end();
-    currentContext_->overlayCommandBuffer->end();
-    currentContext_->fuseCommandBuffer->end();
+    context->uploadCommandBuffer->end();
+    context->worldCommandBuffer->end();
+    context->overlayCommandBuffer->end();
+    context->fuseCommandBuffer->end();
 
-    std::vector<VkSemaphore> waitSemaphores = {currentContext_->imageAcquiredSemaphore->vkSemaphore()};
+    std::vector<VkSemaphore> waitSemaphores = {context->imageAcquiredSemaphore->vkSemaphore()};
     std::vector<VkPipelineStageFlags> waitStageMasks = {VK_PIPELINE_STAGE_ALL_COMMANDS_BIT};
-    std::vector<VkSemaphore> signalSemaphores = {currentContext_->commandProcessedSemaphore->vkSemaphore()};
+    std::vector<VkSemaphore> signalSemaphores = {context->commandProcessedSemaphore->vkSemaphore()};
     std::vector<VkCommandBuffer> commandbuffers = {
-        currentContext_->uploadCommandBuffer->vkCommandBuffer(),
-        currentContext_->worldCommandBuffer->vkCommandBuffer(),
-        currentContext_->overlayCommandBuffer->vkCommandBuffer(),
-        currentContext_->fuseCommandBuffer->vkCommandBuffer(),
+        context->uploadCommandBuffer->vkCommandBuffer(),
+        context->worldCommandBuffer->vkCommandBuffer(),
+        context->overlayCommandBuffer->vkCommandBuffer(),
+        context->fuseCommandBuffer->vkCommandBuffer(),
     };
 
     VkSubmitInfo vkSubmitInfo = {};
@@ -330,7 +339,7 @@ void Framework::submitCommand() {
     vkSubmitInfo.signalSemaphoreCount = signalSemaphores.size();
     vkSubmitInfo.pSignalSemaphores = signalSemaphores.data();
 
-    std::shared_ptr<vk::Fence> fence = currentContext_->commandFinishedFence;
+    std::shared_ptr<vk::Fence> fence = context->commandFinishedFence;
     vkResetFences(device_->vkDevice(), 1, &fence->vkFence());
     vkQueueSubmit(device_->mainVkQueue(), 1, &vkSubmitInfo, fence->vkFence());
 }
@@ -338,20 +347,26 @@ void Framework::submitCommand() {
 void Framework::present() {
     if (!running_) return;
 
+    auto context = safeAcquireCurrentContext();
+    if (!running_ || context == nullptr || device_ == nullptr || swapchain_ == nullptr || pipeline_ == nullptr ||
+        context->commandProcessedSemaphore == nullptr) {
+        return;
+    }
+
     if (dlssFrameGenerationController_ != nullptr) {
-        auto pipelineContext = pipeline_->acquirePipelineContext(currentContext_);
-        if (dlssFrameGenerationController_->present(currentContext_, pipelineContext)) { return; }
+        auto pipelineContext = pipeline_->acquirePipelineContext(context);
+        if (pipelineContext != nullptr && dlssFrameGenerationController_->present(context, pipelineContext)) { return; }
         dlssFrameGenerationController_->advanceBackbufferFrameId();
     }
 
     VkPresentInfoKHR presentInfo = {};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = &currentContext_->commandProcessedSemaphore->vkSemaphore();
+    presentInfo.pWaitSemaphores = &context->commandProcessedSemaphore->vkSemaphore();
 
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = &swapchain_->vkSwapchain();
-    presentInfo.pImageIndices = &currentContext_->frameIndex;
+    presentInfo.pImageIndices = &context->frameIndex;
 
     VkResult result = vkQueuePresentKHR(device_->mainVkQueue(), &presentInfo);
 
