@@ -8,7 +8,7 @@
 #include <array>
 
 class Framework;
-class FrameworkContext;
+struct FrameworkContext;
 class RayTracingModule;
 struct RayTracingModuleContext;
 

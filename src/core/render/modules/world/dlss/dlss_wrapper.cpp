@@ -45,6 +45,7 @@
 // #include <nvvk/debug_util_vk.hpp>
 
 #include <nvsdk_ngx_defs_dlssd.h>
+#include <nvsdk_ngx_defs_dlssg.h>
 #include <nvsdk_ngx_helpers_dlssd.h>
 #include <nvsdk_ngx_helpers_dlssd_vk.h>
 #include <nvsdk_ngx_helpers_vk.h>
@@ -66,8 +67,8 @@
 // Static members  and globals
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Application ID assigned from NVIDIA, currently unused, but can't be 0
-static const unsigned long long g_ApplicationID = 0xbaadf00dbaadcafe;
+static constexpr char g_ProjectID[] = "5f7b4f8d-3e12-4d0b-9d7b-6f9d4e2c4a11";
+static constexpr char g_ProjectEngineVersion[] = "0.1.6-beta";
 
 #define LOGE std::cout << "[DLSS Error] "
 #define LOGW std::cout << "[DLSS Warning] "
@@ -109,6 +110,106 @@ void NVSDK_CONV NGX_AppLogCallback(const char *message,
     LOGE << message << std::endl;
 }
 
+namespace {
+
+NVSDK_NGX_Application_Identifier makeNgxApplicationIdentifier() {
+    NVSDK_NGX_Application_Identifier identifier{};
+    identifier.IdentifierType = NVSDK_NGX_Application_Identifier_Type_Project_Id;
+    identifier.v.ProjectDesc.ProjectId = g_ProjectID;
+    identifier.v.ProjectDesc.EngineType = NVSDK_NGX_ENGINE_TYPE_CUSTOM;
+    identifier.v.ProjectDesc.EngineVersion = g_ProjectEngineVersion;
+    return identifier;
+}
+
+NVSDK_NGX_Result queryNgxFeatureAvailability(NVSDK_NGX_Parameter *params,
+                                             const char *availableKey,
+                                             const char *featureInitKey,
+                                             const char *needsUpdatedDriverKey,
+                                             const char *minDriverMajorKey,
+                                             const char *minDriverMinorKey,
+                                             const char *label) {
+    assert(params);
+
+    int featureSupported = 0;
+    int needsUpdatedDriver = 0;
+    unsigned int minDriverVersionMajor = 0;
+    unsigned int minDriverVersionMinor = 0;
+
+    NVSDK_NGX_Result resUpdatedDriver = NGX_CHECK(params->Get(needsUpdatedDriverKey, &needsUpdatedDriver));
+    NVSDK_NGX_Result resVersionMajor = NGX_CHECK(params->Get(minDriverMajorKey, &minDriverVersionMajor));
+    NVSDK_NGX_Result resVersionMinor = NGX_CHECK(params->Get(minDriverMinorKey, &minDriverVersionMinor));
+
+    if (NVSDK_NGX_SUCCEED(resUpdatedDriver) && needsUpdatedDriver) {
+        if (NVSDK_NGX_SUCCEED(resVersionMajor) && NVSDK_NGX_SUCCEED(resVersionMinor)) {
+            LOGW << label << " requires driver " << minDriverVersionMajor << "." << minDriverVersionMinor
+                 << " or newer" << std::endl;
+        }
+        return NVSDK_NGX_Result_FAIL_OutOfDate;
+    }
+
+    NVSDK_NGX_Result resFeatureSupported = NGX_CHECK(params->Get(availableKey, &featureSupported));
+    if (NVSDK_NGX_FAILED(resFeatureSupported) || !featureSupported) {
+        LOGW << label << " is not available on this hardware/platform" << std::endl;
+        return NVSDK_NGX_Result_FAIL_FeatureNotSupported;
+    }
+
+    NVSDK_NGX_Result resFeatureInit = NGX_CHECK(params->Get(featureInitKey, &featureSupported));
+    if (NVSDK_NGX_FAILED(resFeatureInit) || !featureSupported) {
+        LOGW << label << " is denied for this application" << std::endl;
+        return NVSDK_NGX_Result_FAIL_Denied;
+    }
+
+    return NVSDK_NGX_Result_Success;
+}
+
+NVSDK_NGX_Result getDlssFeatureInstanceExtensions(NVSDK_NGX_Feature feature, std::vector<VkExtensionProperties> &extensions) {
+    NVSDK_NGX_FeatureCommonInfo commonInfo = {};
+
+    NVSDK_NGX_FeatureDiscoveryInfo info{};
+    info.SDKVersion = NVSDK_NGX_Version_API;
+    info.FeatureID = feature;
+    info.Identifier = makeNgxApplicationIdentifier();
+    info.FeatureInfo = &commonInfo;
+
+    uint32_t numExtensions = 0;
+    VkExtensionProperties *props = nullptr;
+
+    NGX_RETURN_ON_FAIL(NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements(&info, &numExtensions, &props));
+
+    extensions.insert(extensions.end(), props, props + numExtensions);
+    return NVSDK_NGX_Result_Success;
+}
+
+NVSDK_NGX_Result getDlssFeatureDeviceExtensions(NVSDK_NGX_Feature feature,
+                                                std::shared_ptr<vk::Instance> instance,
+                                                std::shared_ptr<vk::PhysicalDevice> physicalDevice,
+                                                std::vector<VkExtensionProperties> &extensions) {
+    NVSDK_NGX_FeatureCommonInfo commonInfo = {};
+
+    NVSDK_NGX_FeatureDiscoveryInfo info{};
+    info.SDKVersion = NVSDK_NGX_Version_API;
+    info.FeatureID = feature;
+    info.Identifier = makeNgxApplicationIdentifier();
+    info.ApplicationDataPath = L"";
+    info.FeatureInfo = &commonInfo;
+
+    uint32_t numExtensions = 0;
+    VkExtensionProperties *props = nullptr;
+
+    NVSDK_NGX_Result result = NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements(
+        instance->vkInstance(), physicalDevice->vkPhysicalDevice(), &info, &numExtensions, &props);
+    if (NVSDK_NGX_FAILED(result)) {
+        LOGW << ws2s(GetNGXResultAsString(result)) << " while querying device extensions for feature "
+             << static_cast<int>(feature) << "; skipping." << std::endl;
+        return result;
+    }
+
+    extensions.insert(extensions.end(), props, props + numExtensions);
+    return NVSDK_NGX_Result_Success;
+}
+
+} // namespace
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Class code
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -134,9 +235,11 @@ NVSDK_NGX_Result NgxContext::init(const NgxInitInfo &initInfo) {
     info.LoggingInfo.MinimumLoggingLevel = initInfo.loggingLevel;
 
     // Init NGX API
-    NGX_RETURN_ON_FAIL(NVSDK_NGX_VULKAN_Init(g_ApplicationID, applicationPath_.c_str(), initInfo.instance->vkInstance(),
-                                             initInfo.physicalDevice->vkPhysicalDevice(), initInfo.device->vkDevice(),
-                                             vkGetInstanceProcAddr, vkGetDeviceProcAddr, &info));
+    NGX_RETURN_ON_FAIL(NVSDK_NGX_VULKAN_Init_with_ProjectID(
+        g_ProjectID, NVSDK_NGX_ENGINE_TYPE_CUSTOM, g_ProjectEngineVersion,
+        applicationPath_.c_str(), initInfo.instance->vkInstance(),
+        initInfo.physicalDevice->vkPhysicalDevice(), initInfo.device->vkDevice(),
+        vkGetInstanceProcAddr, vkGetDeviceProcAddr, &info));
 
     device_ = initInfo.device;
 
@@ -163,48 +266,32 @@ void NgxContext::deinit() {
 }
 
 NVSDK_NGX_Result NgxContext::queryDlssRRAvailable() {
-    assert(ngxParams_);
+    return queryNgxFeatureAvailability(ngxParams_,
+                                       NVSDK_NGX_Parameter_SuperSamplingDenoising_Available,
+                                       NVSDK_NGX_Parameter_SuperSamplingDenoising_FeatureInitResult,
+                                       NVSDK_NGX_Parameter_SuperSamplingDenoising_NeedsUpdatedDriver,
+                                       NVSDK_NGX_Parameter_SuperSamplingDenoising_MinDriverVersionMajor,
+                                       NVSDK_NGX_Parameter_SuperSamplingDenoising_MinDriverVersionMinor,
+                                       "DLSS Ray Reconstruction");
+}
 
-    int DLSS_Supported;
-    int needsUpdatedDriver;
-    unsigned minDriverVersionMajor;
-    unsigned minDriverVersionMinor;
+NVSDK_NGX_Result NgxContext::queryDlssFGAvailable() {
+    NVSDK_NGX_Result result = queryNgxFeatureAvailability(ngxParams_,
+                                                          NVSDK_NGX_Parameter_FrameGeneration_Available,
+                                                          NVSDK_NGX_Parameter_FrameGeneration_FeatureInitResult,
+                                                          NVSDK_NGX_Parameter_FrameGeneration_NeedsUpdatedDriver,
+                                                          NVSDK_NGX_Parameter_FrameGeneration_MinDriverVersionMajor,
+                                                          NVSDK_NGX_Parameter_FrameGeneration_MinDriverVersionMinor,
+                                                          "DLSS Frame Generation");
+    if (NVSDK_NGX_SUCCEED(result)) { return result; }
 
-    // Check if DLSS_D (which is the DLSS_RR RayReconstruction Denoiser) is available.
-    // Beware: Don't confuse this with DLSS, which is a different feature just providing upscaling
-    NVSDK_NGX_Result resUpdatedDriver =
-        NGX_CHECK(ngxParams_->Get(NVSDK_NGX_Parameter_SuperSamplingDenoising_NeedsUpdatedDriver, &needsUpdatedDriver));
-    NVSDK_NGX_Result resVersionMajor = NGX_CHECK(
-        ngxParams_->Get(NVSDK_NGX_Parameter_SuperSamplingDenoising_MinDriverVersionMajor, &minDriverVersionMajor));
-    NVSDK_NGX_Result resVersionMinor = NGX_CHECK(
-        ngxParams_->Get(NVSDK_NGX_Parameter_SuperSamplingDenoising_MinDriverVersionMinor, &minDriverVersionMinor));
-
-    if (NVSDK_NGX_SUCCEED(resUpdatedDriver)) {
-        if (needsUpdatedDriver) {
-            // NVIDIA DLSS cannot be loaded due to outdated driver.
-            if (NVSDK_NGX_SUCCEED(resVersionMajor) && NVSDK_NGX_SUCCEED(resVersionMinor)) {
-                // Min Driver Version required: minDriverVersionMajor.minDriverVersionMinor
-                LOGW << "Minimum driver version required: " << minDriverVersionMajor << "." << minDriverVersionMinor
-                     << std::endl;
-                return NVSDK_NGX_Result_FAIL_OutOfDate;
-            }
-        }
-    }
-
-    NVSDK_NGX_Result resDlssSupported =
-        NGX_CHECK(ngxParams_->Get(NVSDK_NGX_Parameter_SuperSamplingDenoising_Available, &DLSS_Supported));
-    if (NVSDK_NGX_FAILED(resDlssSupported) || !DLSS_Supported) {
-        LOGW << "not available on this hardware/platform" << std::endl;
-        return NVSDK_NGX_Result_FAIL_FeatureNotSupported;
-    }
-    resDlssSupported =
-        NGX_CHECK(ngxParams_->Get(NVSDK_NGX_Parameter_SuperSamplingDenoising_FeatureInitResult, &DLSS_Supported));
-    if (NVSDK_NGX_FAILED(resDlssSupported) || !DLSS_Supported) {
-        LOGW << "denied for this application" << std::endl;
-        return NVSDK_NGX_Result_FAIL_Denied;
-    }
-
-    return NVSDK_NGX_Result_Success;
+    return queryNgxFeatureAvailability(ngxParams_,
+                                       NVSDK_NGX_Parameter_FrameInterpolation_Available,
+                                       NVSDK_NGX_Parameter_FrameInterpolation_FeatureInitResult,
+                                       NVSDK_NGX_Parameter_FrameInterpolation_NeedsUpdatedDriver,
+                                       NVSDK_NGX_Parameter_FrameInterpolation_MinDriverVersionMajor,
+                                       NVSDK_NGX_Parameter_FrameInterpolation_MinDriverVersionMinor,
+                                       "DLSS Frame Interpolation");
 }
 
 NVSDK_NGX_Result NgxContext::initDlssRR(const DlssRRInitInfo &initInfo,
@@ -215,52 +302,23 @@ NVSDK_NGX_Result NgxContext::initDlssRR(const DlssRRInitInfo &initInfo,
 }
 
 NVSDK_NGX_Result NgxContext::getDlssRRRequiredInstanceExtensions(std::vector<VkExtensionProperties> &extensions) {
-    NVSDK_NGX_FeatureCommonInfo commonInfo = {};
+    return getDlssFeatureInstanceExtensions(NVSDK_NGX_Feature_RayReconstruction, extensions);
+}
 
-    NVSDK_NGX_FeatureDiscoveryInfo info{};
-    info.SDKVersion = NVSDK_NGX_Version_API;
-    info.FeatureID = NVSDK_NGX_Feature_RayReconstruction;
-    info.Identifier.IdentifierType = NVSDK_NGX_Application_Identifier_Type_Application_Id;
-    info.Identifier.v.ApplicationId = g_ApplicationID;
-    // info.ApplicationDataPath        = m_applicationPath.c_str();
-    info.FeatureInfo = &commonInfo;
-
-    uint32_t numExtensions = 0;
-    VkExtensionProperties *props;
-
-    NGX_RETURN_ON_FAIL(NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements(&info, &numExtensions, &props));
-
-    extensions.insert(extensions.end(), props, props + numExtensions);
-
-    return NVSDK_NGX_Result_Success;
+NVSDK_NGX_Result NgxContext::getDlssFGRequiredInstanceExtensions(std::vector<VkExtensionProperties> &extensions) {
+    return getDlssFeatureInstanceExtensions(NVSDK_NGX_Feature_FrameGeneration, extensions);
 }
 
 NVSDK_NGX_Result NgxContext::getDlssRRRequiredDeviceExtensions(std::shared_ptr<vk::Instance> instance,
                                                                std::shared_ptr<vk::PhysicalDevice> physicalDevice,
                                                                std::vector<VkExtensionProperties> &extensions) {
-    NVSDK_NGX_FeatureCommonInfo commonInfo = {};
+    return getDlssFeatureDeviceExtensions(NVSDK_NGX_Feature_RayReconstruction, instance, physicalDevice, extensions);
+}
 
-    NVSDK_NGX_FeatureDiscoveryInfo info{};
-    info.SDKVersion = NVSDK_NGX_Version_API;
-    info.FeatureID = NVSDK_NGX_Feature_RayReconstruction;
-    info.Identifier.IdentifierType = NVSDK_NGX_Application_Identifier_Type_Application_Id;
-    info.Identifier.v.ApplicationId = g_ApplicationID;
-    info.ApplicationDataPath = L"";
-    info.FeatureInfo = &commonInfo;
-
-    uint32_t numExtensions = 0;
-    VkExtensionProperties *props;
-
-    NVSDK_NGX_Result result = NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements(
-        instance->vkInstance(), physicalDevice->vkPhysicalDevice(), &info, &numExtensions, &props);
-    if (NVSDK_NGX_FAILED(result)) {
-        LOGW << ws2s(GetNGXResultAsString(result)) << " while querying DLSS device extensions; skipping." << std::endl;
-        return result;
-    }
-
-    extensions.insert(extensions.end(), props, props + numExtensions);
-
-    return NVSDK_NGX_Result_Success;
+NVSDK_NGX_Result NgxContext::getDlssFGRequiredDeviceExtensions(std::shared_ptr<vk::Instance> instance,
+                                                               std::shared_ptr<vk::PhysicalDevice> physicalDevice,
+                                                               std::vector<VkExtensionProperties> &extensions) {
+    return getDlssFeatureDeviceExtensions(NVSDK_NGX_Feature_FrameGeneration, instance, physicalDevice, extensions);
 }
 
 NVSDK_NGX_Result NgxContext::querySupportedDlssInputSizes(const QuerySizeInfo &queryInfo, SupportedSizes &sizes) {

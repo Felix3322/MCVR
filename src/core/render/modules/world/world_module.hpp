@@ -8,7 +8,7 @@
 #include <map>
 
 class Framework;
-class FrameworkContext;
+struct FrameworkContext;
 class WorldPipeline;
 struct WorldPipelineContext;
 

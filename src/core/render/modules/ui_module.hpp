@@ -9,7 +9,7 @@
 #include <array>
 
 class Framework;
-class FrameworkContext;
+struct FrameworkContext;
 
 struct GraphicsPipelineShaderInfo {
     std::string vertexShaderFile;

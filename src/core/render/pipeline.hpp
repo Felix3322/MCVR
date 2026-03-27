@@ -20,7 +20,7 @@ struct WorldPipelineBuildParams {
 };
 
 class Framework;
-class FrameworkContext;
+struct FrameworkContext;
 class WorldModule;
 class WorldModuleContext;
 class UIModule;
@@ -75,6 +75,8 @@ struct WorldPipelineContext : public SharedObject<WorldPipelineContext> {
     std::weak_ptr<WorldPipeline> worldPipeline;
 
     std::shared_ptr<vk::DeviceLocalImage> outputImage;
+    std::shared_ptr<vk::DeviceLocalImage> motionVectorImage;
+    std::shared_ptr<vk::DeviceLocalImage> linearDepthImage;
     std::vector<std::shared_ptr<WorldModuleContext>> worldModuleContexts;
 
     WorldPipelineContext(std::shared_ptr<FrameworkContext> frameworkContext,

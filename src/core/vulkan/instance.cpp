@@ -55,6 +55,8 @@ vk::Instance::Instance() {
     std::set<std::string> extStorage;
     std::vector<std::string> dlssRequiredExtensions;
     bool dlssRequirementQuerySuccess = false;
+    std::vector<std::string> dlssFrameGenerationRequiredExtensions;
+    bool dlssFrameGenerationRequirementQuerySuccess = false;
 #ifdef MCVR_ENABLE_XESS
     std::vector<std::string> xessRequiredExtensions;
     bool xessRequirementQuerySuccess = false;
@@ -91,6 +93,25 @@ vk::Instance::Instance() {
         }
     } else {
         instanceCerr() << "failed to query dlss instance extensions; skipping." << std::endl;
+    }
+
+    std::vector<VkExtensionProperties> dlssFrameGenerationExtensions;
+    NVSDK_NGX_Result dlssFgExtensionQueryResult =
+        NgxContext::getDlssFGRequiredInstanceExtensions(dlssFrameGenerationExtensions);
+    if (NVSDK_NGX_SUCCEED(dlssFgExtensionQueryResult)) {
+        dlssFrameGenerationRequirementQuerySuccess = true;
+#ifdef DEBUG
+        instanceCout() << "dlss frame generation extensions:" << std::endl;
+#endif
+        for (const auto &dlssExtension : dlssFrameGenerationExtensions) {
+#ifdef DEBUG
+            instanceCout() << "\t" << dlssExtension.extensionName << std::endl;
+#endif
+            extStorage.insert(dlssExtension.extensionName);
+            dlssFrameGenerationRequiredExtensions.emplace_back(dlssExtension.extensionName);
+        }
+    } else {
+        instanceCerr() << "failed to query dlss frame generation instance extensions; skipping." << std::endl;
     }
 
 #ifdef MCVR_ENABLE_XESS
@@ -159,6 +180,14 @@ vk::Instance::Instance() {
         dlssRequirementQuerySuccess && areRequiredExtensionsSupported(dlssRequiredExtensions);
     if (!dlssInstanceExtensionsCompatible_) {
         instanceCerr() << "dlss instance extension requirements are not fully satisfied." << std::endl;
+    }
+
+    dlssFrameGenerationInstanceExtensionsCompatible_ = dlssFrameGenerationRequirementQuerySuccess &&
+                                                       areRequiredExtensionsSupported(
+                                                           dlssFrameGenerationRequiredExtensions);
+    if (!dlssFrameGenerationInstanceExtensionsCompatible_) {
+        instanceCerr() << "dlss frame generation instance extension requirements are not fully satisfied."
+                       << std::endl;
     }
 
 #ifdef MCVR_ENABLE_XESS
@@ -233,6 +262,10 @@ VkInstance &vk::Instance::vkInstance() {
 
 bool vk::Instance::isDlssInstanceExtensionsCompatible() const {
     return dlssInstanceExtensionsCompatible_;
+}
+
+bool vk::Instance::isDlssFrameGenerationInstanceExtensionsCompatible() const {
+    return dlssFrameGenerationInstanceExtensionsCompatible_;
 }
 
 bool vk::Instance::isXessInstanceExtensionsCompatible() const {

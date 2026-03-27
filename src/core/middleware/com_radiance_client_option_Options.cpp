@@ -38,6 +38,21 @@ JNIEXPORT void JNICALL Java_com_radiance_client_option_Options_nativeSetHdrOutpu
     if (write) Renderer::options.needRecreate = true;
 }
 
+JNIEXPORT void JNICALL Java_com_radiance_client_option_Options_nativeSetDlssFrameGeneration(JNIEnv *,
+                                                                                             jclass,
+                                                                                             jboolean enabled,
+                                                                                             jboolean write) {
+    Renderer::options.dlssFrameGeneration = enabled;
+    if (write) Renderer::options.needRecreate = true;
+}
+
+JNIEXPORT jboolean JNICALL Java_com_radiance_client_option_Options_nativeHasDlssFrameGenerationAvailable(JNIEnv *,
+                                                                                                          jclass) {
+    auto framework = Renderer::instance().framework();
+    if (framework == nullptr) { return JNI_FALSE; }
+    return framework->hasDlssFrameGenerationAvailable() ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL Java_com_radiance_client_option_Options_nativeSetRayBounces(JNIEnv *,
                                                                                    jclass,
                                                                                    jint rayBounces,

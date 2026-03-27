@@ -8,7 +8,7 @@
 #include "core/render/modules/world/world_module.hpp"
 
 class Framework;
-class FrameworkContext;
+struct FrameworkContext;
 class WorldPipeline;
 struct WorldModuleContext;
 

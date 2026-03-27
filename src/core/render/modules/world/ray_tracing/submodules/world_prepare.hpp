@@ -10,7 +10,7 @@
 #include <queue>
 
 class Framework;
-class FrameworkContext;
+struct FrameworkContext;
 class RayTracingModule;
 struct RayTracingModuleContext;
 struct Entity;

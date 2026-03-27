@@ -91,12 +91,16 @@ class NgxContext : public SharedObject<NgxContext> {
 
     // Initialize the NGX context on the given Vulkan device
     NVSDK_NGX_Result init(const NgxInitInfo &initInfo);
+    bool isInitialized() const { return device_ != nullptr && ngxParams_ != nullptr; }
+    std::shared_ptr<vk::Device> device() const { return device_; }
+    NVSDK_NGX_Parameter *params() const { return ngxParams_; }
 
     // Do not destroy NgxContext before all instances of DLSS_RR are destroyed.
     void deinit();
 
     // Check if DLSS_RR is available and createDlssRR() can be called
     NVSDK_NGX_Result queryDlssRRAvailable();
+    NVSDK_NGX_Result queryDlssFGAvailable();
 
     struct SupportedSizes {
         VkExtent2D minSize = {};
@@ -122,9 +126,13 @@ class NgxContext : public SharedObject<NgxContext> {
 
     // Append 'extensions' with the instance extensions that should be enabled for DLSS_RR
     static NVSDK_NGX_Result getDlssRRRequiredInstanceExtensions(std::vector<VkExtensionProperties> &extensions);
+    static NVSDK_NGX_Result getDlssFGRequiredInstanceExtensions(std::vector<VkExtensionProperties> &extensions);
 
     // Append 'extensions' with the device extensions that should be enabled for DLSS_RR
     static NVSDK_NGX_Result getDlssRRRequiredDeviceExtensions(std::shared_ptr<vk::Instance> instance,
+                                                              std::shared_ptr<vk::PhysicalDevice> physicalDevice,
+                                                              std::vector<VkExtensionProperties> &extensions);
+    static NVSDK_NGX_Result getDlssFGRequiredDeviceExtensions(std::shared_ptr<vk::Instance> instance,
                                                               std::shared_ptr<vk::PhysicalDevice> physicalDevice,
                                                               std::vector<VkExtensionProperties> &extensions);
 

@@ -39,6 +39,8 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
     };
     std::vector<std::string> dlssRequiredExtensions;
     bool dlssRequirementQuerySuccess = false;
+    std::vector<std::string> dlssFrameGenerationRequiredExtensions;
+    bool dlssFrameGenerationRequirementQuerySuccess = false;
 #ifdef MCVR_ENABLE_XESS
     std::vector<std::string> xessRequiredExtensions;
     bool xessRequirementQuerySuccess = false;
@@ -58,6 +60,26 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
             dlssRequiredExtensions.emplace_back(dlssExtension.extensionName);
             if (std::strcmp(dlssExtension.extensionName, "VK_EXT_buffer_device_address") == 0)
                 continue; // already enabled using PHYSICAL_DEVICE_VULKAN_1_2_FEATURES
+#ifdef DEBUG
+            deviceCout() << "\t" << dlssExtension.extensionName << std::endl;
+#endif
+            enabledExtensions.push_back(dlssExtension.extensionName);
+        }
+    }
+
+    std::vector<VkExtensionProperties> dlssFrameGenerationExtensions;
+    NVSDK_NGX_Result dlssFgResult =
+        NgxContext::getDlssFGRequiredDeviceExtensions(instance_, physicalDevice_, dlssFrameGenerationExtensions);
+    if (NVSDK_NGX_FAILED(dlssFgResult)) {
+        deviceCerr() << "dlss frame generation device extensions unavailable; skipping." << std::endl;
+    } else {
+        dlssFrameGenerationRequirementQuerySuccess = true;
+#ifdef DEBUG
+        deviceCout() << "dlss frame generation device extensions:" << std::endl;
+#endif
+        for (const auto &dlssExtension : dlssFrameGenerationExtensions) {
+            dlssFrameGenerationRequiredExtensions.emplace_back(dlssExtension.extensionName);
+            if (std::strcmp(dlssExtension.extensionName, "VK_EXT_buffer_device_address") == 0) continue;
 #ifdef DEBUG
             deviceCout() << "\t" << dlssExtension.extensionName << std::endl;
 #endif
@@ -114,6 +136,13 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
                                       areRequiredExtensionsSupported(dlssRequiredExtensions);
     if (!dlssDeviceExtensionsCompatible_) {
         deviceCerr() << "dlss device extension requirements are not fully satisfied." << std::endl;
+    }
+
+    dlssFrameGenerationDeviceExtensionsCompatible_ =
+        instance_->isDlssFrameGenerationInstanceExtensionsCompatible() && dlssFrameGenerationRequirementQuerySuccess &&
+        areRequiredExtensionsSupported(dlssFrameGenerationRequiredExtensions);
+    if (!dlssFrameGenerationDeviceExtensionsCompatible_) {
+        deviceCerr() << "dlss frame generation device extension requirements are not fully satisfied." << std::endl;
     }
 
 #ifdef MCVR_ENABLE_XESS
@@ -435,6 +464,10 @@ bool vk::Device::hasExtendedDynamicState2LogicOp() const {
 
 bool vk::Device::isDlssDeviceExtensionsCompatible() const {
     return dlssDeviceExtensionsCompatible_;
+}
+
+bool vk::Device::isDlssFrameGenerationDeviceExtensionsCompatible() const {
+    return dlssFrameGenerationDeviceExtensionsCompatible_;
 }
 
 bool vk::Device::isXessDeviceExtensionsCompatible() const {

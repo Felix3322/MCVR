@@ -5,47 +5,6 @@
 #include "core/render/render_framework.hpp"
 #include "core/render/renderer.hpp"
 
-std::shared_ptr<NgxContext> DLSSModule::ngxContext_ = nullptr;
-
-bool DLSSModule::initNGXContext() {
-    std::filesystem::path dlssPath = Renderer::folderPath / "dlss";
-    std::error_code ec;
-    if (!std::filesystem::create_directories(dlssPath, ec)) {
-        if (ec) {
-            std::cerr << "Failed to create directory: " << ec.message() << std::endl;
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    auto framework = Renderer::instance().framework();
-    ngxContext_ = NgxContext::create();
-
-    NgxContext::NgxInitInfo ngxInitInfo{};
-    ngxInitInfo.instance = framework->instance();
-    ngxInitInfo.physicalDevice = framework->physicalDevice();
-    ngxInitInfo.device = framework->device();
-    ngxInitInfo.applicationPath = dlssPath.string();
-    if (ngxContext_->init(ngxInitInfo) != NVSDK_NGX_Result_Success) {
-        ngxContext_ = nullptr;
-        return false;
-    }
-
-    if (ngxContext_->queryDlssRRAvailable() != NVSDK_NGX_Result_Success) {
-        ngxContext_->deinit();
-        ngxContext_ = nullptr;
-        return false;
-    }
-
-    return true;
-}
-
-void DLSSModule::deinitNGXContext() {
-    if (ngxContext_ != nullptr) {
-        ngxContext_->deinit();
-        ngxContext_ = nullptr;
-    }
-}
-
 DLSSModule::DLSSModule() {}
 
 void DLSSModule::init(std::shared_ptr<Framework> framework, std::shared_ptr<WorldPipeline> worldPipeline) {
@@ -71,7 +30,8 @@ bool DLSSModule::setOrCreateInputImages(std::vector<std::shared_ptr<vk::DeviceLo
                                         std::vector<VkFormat> &formats,
                                         uint32_t frameIndex) {
     auto framework = framework_.lock();
-    if (ngxContext_ == nullptr) return false;
+    auto ngxContext = framework == nullptr ? nullptr : framework->ngxContext();
+    if (ngxContext == nullptr) return false;
 
     if (images.size() != inputImageNum) return false;
 
@@ -79,7 +39,7 @@ bool DLSSModule::setOrCreateInputImages(std::vector<std::shared_ptr<vk::DeviceLo
     querySizeInfo.outputSize.width = outputWidth_;
     querySizeInfo.outputSize.height = outputHeight_;
     querySizeInfo.quality = mode_;
-    ngxContext_->querySupportedDlssInputSizes(querySizeInfo, supportedSizes_);
+    ngxContext->querySupportedDlssInputSizes(querySizeInfo, supportedSizes_);
 #ifdef DEBUG
     std::cout << "DLSS sizes:" << std::endl;
     std::cout << "\tminSize: [" << supportedSizes_.minSize.width << ", " << supportedSizes_.minSize.height << "]"
@@ -164,7 +124,8 @@ bool DLSSModule::setOrCreateOutputImages(std::vector<std::shared_ptr<vk::DeviceL
                                          std::vector<VkFormat> &formats,
                                          uint32_t frameIndex) {
     auto framework = framework_.lock();
-    if (ngxContext_ == nullptr) return false;
+    auto ngxContext = framework == nullptr ? nullptr : framework->ngxContext();
+    if (ngxContext == nullptr) return false;
 
     if (images.size() != outputImageNum || images[0] == nullptr) return false;
 
@@ -206,13 +167,17 @@ void DLSSModule::build() {
 
     auto framework = framework_.lock();
     auto worldPipeline = worldPipeline_.lock();
+    auto ngxContext = framework == nullptr ? nullptr : framework->ngxContext();
     uint32_t size = framework->swapchain()->imageCount();
 
     NgxContext::DlssRRInitInfo dlssRRInitInfo{};
     dlssRRInitInfo.inputSize = {inputWidth_, inputHeight_};
     dlssRRInitInfo.outputSize = {outputWidth_, outputHeight_};
     dlssRRInitInfo.quality = mode_;
-    ngxContext_->initDlssRR(dlssRRInitInfo, framework->mainCommandPool(), dlss_);
+    if (ngxContext == nullptr ||
+        NVSDK_NGX_FAILED(ngxContext->initDlssRR(dlssRRInitInfo, framework->mainCommandPool(), dlss_))) {
+        throw std::runtime_error("DLSS RR initialization failed");
+    }
 
     contexts_.resize(size);
 

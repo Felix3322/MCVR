@@ -9,7 +9,7 @@
 #include "core/render/modules/world/world_module.hpp"
 
 class Framework;
-class FrameworkContext;
+struct FrameworkContext;
 class WorldPipeline;
 struct WorldModuleContext;
 
@@ -22,9 +22,6 @@ class DLSSModule : public WorldModule, public SharedObject<DLSSModule> {
     constexpr static std::string_view NAME = "render_pipeline.module.dlss.name";
     constexpr static uint32_t inputImageNum = 8;
     constexpr static uint32_t outputImageNum = 2;
-
-    static bool initNGXContext();
-    static void deinitNGXContext();
 
     DLSSModule();
 
@@ -49,8 +46,6 @@ class DLSSModule : public WorldModule, public SharedObject<DLSSModule> {
     void preClose() override;
 
   private:
-    static std::shared_ptr<NgxContext> ngxContext_;
-
     // input
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> hdrImages_;
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> diffuseAlbedoImages_;

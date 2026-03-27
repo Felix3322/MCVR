@@ -168,6 +168,14 @@ WorldPipelineContext::WorldPipelineContext(std::shared_ptr<FrameworkContext> fra
     for (int i = 0; i < worldModules.size(); i++) {
         worldModuleContexts.push_back(worldModules[i]->contexts()[frameworkContext->frameIndex]);
     }
+
+    for (auto &moduleContext : worldModuleContexts) {
+        auto rayTracingContext = std::dynamic_pointer_cast<RayTracingModuleContext>(moduleContext);
+        if (rayTracingContext == nullptr) { continue; }
+        motionVectorImage = rayTracingContext->motionVectorImage;
+        linearDepthImage = rayTracingContext->linearDepthImage;
+        break;
+    }
 }
 
 void WorldPipelineContext::render() {
@@ -315,24 +323,16 @@ void Pipeline::collectWorldModules() {
     worldModuleInOutImageNums.insert(std::make_pair(
         ToneMappingModule::NAME, std::make_pair(ToneMappingModule::inputImageNum, ToneMappingModule::outputImageNum)));
 
-    if (framework != nullptr && framework->device() != nullptr &&
-        framework->device()->isDlssDeviceExtensionsCompatible()) {
-        bool result = DLSSModule::initNGXContext();
-        if (result) {
-            worldModuleConstructors.insert(
-                std::make_pair(DLSSModule::NAME,
-                               [](std::shared_ptr<Framework> framework, std::shared_ptr<WorldPipeline> worldPipeline) {
-                                   return DLSSModule::create(framework, worldPipeline);
-                               }));
-            worldModuleInOutImageNums.insert(std::make_pair(
-                DLSSModule::NAME, std::make_pair(DLSSModule::inputImageNum, DLSSModule::outputImageNum)));
-            worldModuleStaticPreCloser.insert(std::make_pair(DLSSModule::NAME, DLSSModule::deinitNGXContext));
-        } else {
-            std::cerr << "[Pipeline] dlss module skipped: NGX initialization/query failed." << std::endl;
-        }
+    if (framework != nullptr && framework->hasDlssRRAvailable()) {
+        worldModuleConstructors.insert(
+            std::make_pair(DLSSModule::NAME,
+                           [](std::shared_ptr<Framework> framework, std::shared_ptr<WorldPipeline> worldPipeline) {
+                               return DLSSModule::create(framework, worldPipeline);
+                           }));
+        worldModuleInOutImageNums.insert(std::make_pair(
+            DLSSModule::NAME, std::make_pair(DLSSModule::inputImageNum, DLSSModule::outputImageNum)));
     } else {
-        std::cerr << "[Pipeline] dlss module skipped: incompatible instance/device extension requirements."
-                  << std::endl;
+        std::cerr << "[Pipeline] dlss module skipped: DLSS RR is unavailable." << std::endl;
     }
 
     worldModuleConstructors.insert(

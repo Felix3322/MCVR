@@ -20,6 +20,7 @@ class Device : public SharedObject<Device> {
 
     bool hasExtendedDynamicState2LogicOp() const;
     bool isDlssDeviceExtensionsCompatible() const;
+    bool isDlssFrameGenerationDeviceExtensionsCompatible() const;
     bool isXessDeviceExtensionsCompatible() const;
 
   private:
@@ -33,6 +34,7 @@ class Device : public SharedObject<Device> {
 
     bool extendedDynamicState2LogicOp_ = false;
     bool dlssDeviceExtensionsCompatible_ = false;
+    bool dlssFrameGenerationDeviceExtensionsCompatible_ = false;
     bool xessDeviceExtensionsCompatible_ = false;
 };
 }; // namespace vk
