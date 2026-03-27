@@ -92,11 +92,13 @@ VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR &surfaceCapabilities,
 }
 
 VkPresentModeKHR choosePresentMode(const std::vector<VkPresentModeKHR> presentModes) {
+    bool fgSwapchainActive = Renderer::options.dlssFrameGenerationActive;
+
     auto supportsMode = [&presentModes](VkPresentModeKHR mode) {
         return std::find(presentModes.begin(), presentModes.end(), mode) != presentModes.end();
     };
 
-    if (Renderer::options.dlssFrameGeneration) {
+    if (fgSwapchainActive) {
         if (supportsMode(VK_PRESENT_MODE_MAILBOX_KHR)) {
             swapchainCout() << "DLSS Frame Generation using MAILBOX present mode to avoid halving render cadence."
                             << std::endl;
@@ -133,9 +135,11 @@ void vk::Swapchain::reconstruct() {
     maxExtent_ = surfaceCapabilities.maxImageExtent;
     minExtent_ = surfaceCapabilities.minImageExtent;
 
+    bool fgSwapchainActive = Renderer::options.dlssFrameGenerationActive;
+
     // Determine number of images for swap chain
-    imageCount_ = surfaceCapabilities.minImageCount + (Renderer::options.dlssFrameGeneration ? 2u : 1u);
-    uint32_t preferredImageCap = Renderer::options.dlssFrameGeneration ? 4u : 3u;
+    imageCount_ = surfaceCapabilities.minImageCount + (fgSwapchainActive ? 2u : 1u);
+    uint32_t preferredImageCap = fgSwapchainActive ? 4u : 3u;
     imageCount_ = std::max(surfaceCapabilities.minImageCount, std::min(imageCount_, preferredImageCap));
     if (surfaceCapabilities.maxImageCount != 0 && imageCount_ > surfaceCapabilities.maxImageCount) {
         imageCount_ = surfaceCapabilities.maxImageCount;

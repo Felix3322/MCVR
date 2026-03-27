@@ -359,8 +359,8 @@ bool DlssFrameGenerationController::ensureFeature(uint32_t renderWidth, uint32_t
 
 bool DlssFrameGenerationController::present(std::shared_ptr<FrameworkContext> context,
                                             std::shared_ptr<PipelineContext> pipelineContext) {
-    if (!available_ || !Renderer::options.dlssFrameGeneration || !context || !pipelineContext ||
-        pipelineContext->worldPipelineContext == nullptr) {
+    if (!available_ || !Renderer::options.dlssFrameGeneration || !Renderer::options.dlssFrameGenerationActive ||
+        !context || !pipelineContext || pipelineContext->worldPipelineContext == nullptr) {
         return false;
     }
 

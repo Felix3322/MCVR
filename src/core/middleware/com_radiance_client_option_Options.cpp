@@ -43,7 +43,20 @@ JNIEXPORT void JNICALL Java_com_radiance_client_option_Options_nativeSetDlssFram
                                                                                              jboolean enabled,
                                                                                              jboolean write) {
     Renderer::options.dlssFrameGeneration = enabled;
-    if (write) Renderer::options.needRecreate = true;
+    auto world = Renderer::is_initialized() ? Renderer::instance().world() : nullptr;
+    bool worldRendering = world != nullptr && world->shouldRender();
+
+    if (!enabled) {
+        if (Renderer::options.dlssFrameGenerationActive) {
+            Renderer::options.needRecreate = true;
+        }
+        Renderer::options.dlssFrameGenerationActive = false;
+        return;
+    }
+
+    if (write && worldRendering) {
+        Renderer::options.needRecreate = true;
+    }
 }
 
 JNIEXPORT jboolean JNICALL Java_com_radiance_client_option_Options_nativeHasDlssFrameGenerationAvailable(JNIEnv *,

@@ -168,14 +168,17 @@ void DLSSModule::build() {
     auto framework = framework_.lock();
     auto worldPipeline = worldPipeline_.lock();
     auto ngxContext = framework == nullptr ? nullptr : framework->ngxContext();
+    if (framework == nullptr || worldPipeline == nullptr || ngxContext == nullptr || dlss_ == nullptr ||
+        framework->swapchain() == nullptr) {
+        throw std::runtime_error("DLSS RR initialization prerequisites are unavailable");
+    }
     uint32_t size = framework->swapchain()->imageCount();
 
     NgxContext::DlssRRInitInfo dlssRRInitInfo{};
     dlssRRInitInfo.inputSize = {inputWidth_, inputHeight_};
     dlssRRInitInfo.outputSize = {outputWidth_, outputHeight_};
     dlssRRInitInfo.quality = mode_;
-    if (ngxContext == nullptr ||
-        NVSDK_NGX_FAILED(ngxContext->initDlssRR(dlssRRInitInfo, framework->mainCommandPool(), dlss_))) {
+    if (NVSDK_NGX_FAILED(ngxContext->initDlssRR(dlssRRInitInfo, framework->mainCommandPool(), dlss_))) {
         throw std::runtime_error("DLSS RR initialization failed");
     }
 
@@ -196,7 +199,9 @@ void DLSSModule::bindTexture(std::shared_ptr<vk::Sampler> sampler,
                              int index) {}
 
 void DLSSModule::preClose() {
-    dlss_->deinit();
+    if (dlss_ != nullptr) {
+        dlss_->deinit();
+    }
 }
 
 DLSSModuleContext::DLSSModuleContext(std::shared_ptr<FrameworkContext> frameworkContext,
@@ -217,11 +222,15 @@ DLSSModuleContext::DLSSModuleContext(std::shared_ptr<FrameworkContext> framework
 
 void DLSSModuleContext::render() {
     auto context = frameworkContext.lock();
+    if (context == nullptr) return;
     auto framework = context->framework.lock();
+    if (framework == nullptr) return;
     auto worldCommandBuffer = context->worldCommandBuffer;
+    if (worldCommandBuffer == nullptr) return;
     auto mainQueueIndex = framework->physicalDevice()->mainQueueIndex();
 
     auto module = dLSSModule.lock();
+    if (module == nullptr || module->dlss_ == nullptr) return;
 
     {
         worldCommandBuffer->barriersBufferImage(

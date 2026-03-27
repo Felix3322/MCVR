@@ -21,6 +21,7 @@ struct Options {
     uint32_t denoiserMode = 1;
     bool hdrOutput = false;
     bool dlssFrameGeneration = false;
+    bool dlssFrameGenerationActive = false;
     uint32_t rayBounces = 4;
     uint32_t debugMode = 0;
     bool needRecreate = false;

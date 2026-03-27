@@ -22,6 +22,19 @@ std::ostream &renderFrameworkCerr() {
     return std::cerr << "[Render Framework] ";
 }
 
+namespace {
+
+bool shouldHotEngageDlssFrameGeneration(bool dlssFrameGenerationAvailable) {
+    if (!dlssFrameGenerationAvailable || !Renderer::options.dlssFrameGeneration || !Renderer::is_initialized()) {
+        return false;
+    }
+
+    auto world = Renderer::instance().world();
+    return world != nullptr && world->shouldRender();
+}
+
+} // namespace
+
 FrameworkContext::FrameworkContext(std::shared_ptr<Framework> framework, uint32_t frameIndex)
     : framework(framework),
       frameIndex(frameIndex),
@@ -353,7 +366,12 @@ void Framework::present() {
         return;
     }
 
-    if (dlssFrameGenerationController_ != nullptr) {
+    bool desiredDlssFrameGenerationActive = shouldHotEngageDlssFrameGeneration(dlssFrameGenerationAvailable_);
+    if (desiredDlssFrameGenerationActive != Renderer::options.dlssFrameGenerationActive) {
+        Renderer::options.needRecreate = true;
+    }
+
+    if (Renderer::options.dlssFrameGenerationActive && dlssFrameGenerationController_ != nullptr) {
         auto pipelineContext = pipeline_->acquirePipelineContext(context);
         if (pipelineContext != nullptr && dlssFrameGenerationController_->present(context, pipelineContext)) { return; }
         dlssFrameGenerationController_->advanceBackbufferFrameId();
@@ -415,6 +433,7 @@ void Framework::recreate() {
     commandFinishedFences_.clear();
     commandProcessedSemaphores_.clear();
 
+    Renderer::options.dlssFrameGenerationActive = shouldHotEngageDlssFrameGeneration(dlssFrameGenerationAvailable_);
     swapchain_->reconstruct();
 
     uint32_t size = swapchain_->imageCount();
