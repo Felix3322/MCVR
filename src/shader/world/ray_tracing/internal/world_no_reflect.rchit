@@ -119,6 +119,8 @@ void main() {
     bool useFarFieldFlatMaterial =
         pc.farFieldMaterialMode != 0u &&
         dot(worldPos, worldPos) >= pow(pc.farFieldStartDistanceChunks * 16.0, 2.0);
+    float farFieldBaseColorBias = farFieldBaseColorLodBias(worldPos, pc.farFieldStartDistanceChunks);
+    float farFieldPbrBias = farFieldPbrDetailLodBias(worldPos, pc.farFieldStartDistanceChunks);
     uint coordinate = v0.coordinate;
     vec3 normal = baryCoords.x * v0.norm + baryCoords.y * v1.norm + baryCoords.z * v2.norm;
     if (coordinate == 1) {
@@ -158,21 +160,23 @@ void main() {
         vec3 dposdu, dposdv;
         computedposduDv(v0.pos, v1.pos, v2.pos, v0.textureUV, v1.textureUV, v2.textureUV, dposdu, dposdv);
         float lod = lodWithCone(textures[nonuniformEXT(textureID)], textureUV, coneRadiusWorld, dposdu, dposdv);
+        float baseColorLod = lod + farFieldBaseColorBias;
+        float detailLod = lod + farFieldPbrBias;
 
-        albedoValue = sampleTexture(textures[nonuniformEXT(textureID)], textureUV, lod, false);
+        albedoValue = sampleTexture(textures[nonuniformEXT(textureID)], textureUV, baseColorLod, false);
         albedoValue.a = resolveSurfaceAlpha(albedoValue.a * colorLayerValue.a, alphaMode);
         if (useFarFieldFlatMaterial || forceNoPbrMaterial) {
             specularValue = vec4(0.0);
             normalValue = vec4(0.5, 0.5, 1.0, 0.0);
         } else {
             if (specularTextureID >= 0) {
-                specularValue = sampleTexture(textures[nonuniformEXT(specularTextureID)], textureUV, lod, false);
+                specularValue = sampleTexture(textures[nonuniformEXT(specularTextureID)], textureUV, detailLod, false);
             } else {
                 specularValue = vec4(0.0);
             }
             if (normalTextureID >= 0) {
                 normalValue = samplePBRTexture(textures[nonuniformEXT(normalTextureID)], textureUV, atlasUvMin,
-                                               atlasUvMax, lod, pc.pbrSamplingMode);
+                                               atlasUvMax, detailLod, pc.pbrSamplingMode);
             } else {
                 normalValue = vec4(0.5, 0.5, 1.0, 0.0);
             }

@@ -41,6 +41,18 @@ indexBuffer;
 
 #include "util/vertex.glsl"
 
+layout(push_constant) uniform PushConstant {
+    int numRayBounces;
+    float directLightStrength;
+    float indirectLightStrength;
+    float basicRadiance;
+    uint pbrSamplingMode;
+    uint transparentSplitMode;
+    float farFieldStartDistanceChunks;
+    uint farFieldMaterialMode;
+}
+pc;
+
 layout(location = 0) rayPayloadInEXT MainRay mainRay;
 hitAttributeEXT vec2 attribs;
 
@@ -55,6 +67,8 @@ void main() {
     loadTriangleMaterial(geometryBufferIndex, i0, i1, i2, m0, m1, m2);
 
     vec3 baryCoords = vec3(1.0 - (attribs.x + attribs.y), attribs.x, attribs.y);
+    vec3 worldPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
+    float farFieldAlphaBias = farFieldAlphaLodBias(worldPos, pc.farFieldStartDistanceChunks);
     uint packedData = m0.packedData;
     uint textureID = m0.textureID;
     uint alphaMode = getAlphaMode(packedData);
@@ -73,7 +87,9 @@ void main() {
         vec3 dposdu, dposdv;
         computedposduDv(p0.pos, p1.pos, p2.pos, m0.textureUV, m1.textureUV, m2.textureUV, dposdu, dposdv);
         lod = lodWithCone(textures[nonuniformEXT(textureID)], uv, coneRadiusWorld, dposdu, dposdv);
-        alpha *= sampleTexture(textures[nonuniformEXT(textureID)], uv, lod, false).a;
+        float alphaLod = lod + farFieldAlphaBias;
+        alpha *= sampleTexture(textures[nonuniformEXT(textureID)], uv, alphaLod, false).a;
+        lod = alphaLod;
     }
 
     alpha = resolveSurfaceAlpha(alpha, alphaMode);

@@ -158,6 +158,8 @@ void main() {
     bool useFarFieldFlatMaterial =
         pc.farFieldMaterialMode != 0u &&
         dot(worldPos, worldPos) >= pow(pc.farFieldStartDistanceChunks * 16.0, 2.0);
+    float farFieldBaseColorBias = farFieldBaseColorLodBias(worldPos, pc.farFieldStartDistanceChunks);
+    float farFieldPbrBias = farFieldPbrDetailLodBias(worldPos, pc.farFieldStartDistanceChunks);
 
     uint packedData = m0.packedData;
     bool useColorLayer = hasColorLayer(packedData);
@@ -194,18 +196,20 @@ void main() {
         vec3 dposdu, dposdv;
         computedposduDv(p0.pos, p1.pos, p2.pos, m0.textureUV, m1.textureUV, m2.textureUV, dposdu, dposdv);
         float lod = lodWithCone(textures[nonuniformEXT(textureID)], textureUV, coneRadiusWorld, dposdu, dposdv);
+        float baseColorLod = lod + farFieldBaseColorBias;
+        float detailLod = lod + farFieldPbrBias;
 
-        albedoValue = sampleTexture(textures[nonuniformEXT(textureID)], textureUV, lod, false);
+        albedoValue = sampleTexture(textures[nonuniformEXT(textureID)], textureUV, baseColorLod, false);
         albedoValue.a = resolveSurfaceAlpha(albedoValue.a * colorLayerValue.a, alphaMode);
         if (useFarFieldFlatMaterial || forceNoPbrMaterial) {
             specularValue = vec4(0.0);
             normalValue = vec4(0.5, 0.5, 1.0, 0.0);
         } else {
             specularValue = textureMap.specular >= 0 ?
-                                sampleTexture(textures[nonuniformEXT(textureMap.specular)], textureUV, lod, false) :
+                                sampleTexture(textures[nonuniformEXT(textureMap.specular)], textureUV, detailLod, false) :
                                 vec4(0.0);
             normalValue = textureMap.normal >= 0 ? samplePBRTexture(textures[nonuniformEXT(textureMap.normal)],
-                                                                     textureUV, atlasUvMin, atlasUvMax, lod,
+                                                                     textureUV, atlasUvMin, atlasUvMax, detailLod,
                                                                      pc.pbrSamplingMode) :
                                                    vec4(0.0);
         }

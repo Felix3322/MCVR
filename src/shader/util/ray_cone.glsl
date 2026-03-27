@@ -55,6 +55,27 @@ float lodWithCone(sampler2D tex, vec2 uv, float coneRadiusWorld, vec3 dposdu, ve
     return lod;
 }
 
+float farFieldLodBias(vec3 worldPos, float startDistanceChunks, float strength, float maxBias) {
+    float startDistance = max(startDistanceChunks * 16.0, 1.0);
+    float distanceToHit = length(worldPos);
+    if (distanceToHit <= startDistance) { return 0.0; }
+
+    float distanceRatio = max(distanceToHit / startDistance, 1.0);
+    return clamp(log2(distanceRatio) * strength, 0.0, maxBias);
+}
+
+float farFieldBaseColorLodBias(vec3 worldPos, float startDistanceChunks) {
+    return farFieldLodBias(worldPos, startDistanceChunks, 1.1, 1.75);
+}
+
+float farFieldPbrDetailLodBias(vec3 worldPos, float startDistanceChunks) {
+    return farFieldLodBias(worldPos, startDistanceChunks, 1.6, 2.5);
+}
+
+float farFieldAlphaLodBias(vec3 worldPos, float startDistanceChunks) {
+    return farFieldLodBias(worldPos, startDistanceChunks, 0.8, 1.25);
+}
+
 float roughnessToExtraSpread(float roughness) {
     float extraTheta = roughness * 0.35;
     return tan(extraTheta);
