@@ -33,7 +33,10 @@ std::shared_ptr<World> Renderer::world() {
 }
 
 void Renderer::close() {
-    if (framework_ != nullptr) framework_->waitDeviceIdle();
+    if (framework_ != nullptr) {
+        framework_->beginShutdown();
+        framework_->waitDeviceIdle();
+    }
 
     if (world_ != nullptr) world_->close();
     if (framework_ != nullptr) framework_->close();

@@ -155,6 +155,12 @@ JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_prese
     framework->present();
 }
 
+JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_beginShutdownNative(JNIEnv *, jclass) {
+    auto framework = Renderer::instance().framework();
+    if (framework == nullptr) return;
+    framework->beginShutdown();
+}
+
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_drawOverlay(
     JNIEnv *, jclass, jint vertexId, jint indexId, jint pipelineType, jint indexCount, jint indexType) {
     auto framework = Renderer::instance().framework();

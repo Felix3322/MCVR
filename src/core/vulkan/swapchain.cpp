@@ -92,11 +92,30 @@ VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR &surfaceCapabilities,
 }
 
 VkPresentModeKHR choosePresentMode(const std::vector<VkPresentModeKHR> presentModes) {
+    auto supportsMode = [&presentModes](VkPresentModeKHR mode) {
+        return std::find(presentModes.begin(), presentModes.end(), mode) != presentModes.end();
+    };
+
+    if (Renderer::options.dlssFrameGeneration) {
+        if (supportsMode(VK_PRESENT_MODE_MAILBOX_KHR)) {
+            swapchainCout() << "DLSS Frame Generation using MAILBOX present mode to avoid halving render cadence."
+                            << std::endl;
+            return VK_PRESENT_MODE_MAILBOX_KHR;
+        }
+        if (supportsMode(VK_PRESENT_MODE_IMMEDIATE_KHR)) {
+            swapchainCout() << "DLSS Frame Generation falling back to IMMEDIATE present mode; MAILBOX unavailable."
+                            << std::endl;
+            return VK_PRESENT_MODE_IMMEDIATE_KHR;
+        }
+
+        swapchainCerr() << "DLSS Frame Generation is limited to FIFO present mode on this device; "
+                           "interpolated frames may be skipped to protect base FPS."
+                        << std::endl;
+        return VK_PRESENT_MODE_FIFO_KHR;
+    }
     if (Renderer::options.vsync) { return VK_PRESENT_MODE_FIFO_KHR; }
 
-    for (const auto &presentMode : presentModes) {
-        if (presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR) { return presentMode; }
-    }
+    if (supportsMode(VK_PRESENT_MODE_IMMEDIATE_KHR)) { return VK_PRESENT_MODE_IMMEDIATE_KHR; }
 
     // If mailbox is unavailable, fall back to FIFO (guaranteed to be available)
     return VK_PRESENT_MODE_FIFO_KHR;
@@ -115,8 +134,9 @@ void vk::Swapchain::reconstruct() {
     minExtent_ = surfaceCapabilities.minImageExtent;
 
     // Determine number of images for swap chain
-    imageCount_ = surfaceCapabilities.minImageCount + 1;
-    imageCount_ = std::clamp(imageCount_, (uint32_t)2, (uint32_t)3);
+    imageCount_ = surfaceCapabilities.minImageCount + (Renderer::options.dlssFrameGeneration ? 2u : 1u);
+    uint32_t preferredImageCap = Renderer::options.dlssFrameGeneration ? 4u : 3u;
+    imageCount_ = std::max(surfaceCapabilities.minImageCount, std::min(imageCount_, preferredImageCap));
     if (surfaceCapabilities.maxImageCount != 0 && imageCount_ > surfaceCapabilities.maxImageCount) {
         imageCount_ = surfaceCapabilities.maxImageCount;
     }

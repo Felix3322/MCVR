@@ -3,6 +3,7 @@
 #include "common/shared.hpp"
 #include "common/singleton.hpp"
 #include "core/all_extern.hpp"
+#include "core/render/dlss_frame_generation.hpp"
 #include "core/render/modules/world/dlss/dlss_wrapper.hpp"
 #include "core/render/pipeline.hpp"
 #include "core/vulkan/all_core_vulkan.hpp"
@@ -67,6 +68,7 @@ class Framework : public SharedObject<Framework> {
     ~Framework();
 
     void init(GLFWwindow *window);
+    void beginShutdown();
     void acquireContext();
     void submitCommand();
     void present();
@@ -98,6 +100,9 @@ class Framework : public SharedObject<Framework> {
     std::shared_ptr<FrameworkContext> safeAcquireCurrentContext();
 
     std::shared_ptr<Pipeline> pipeline();
+    std::shared_ptr<NgxContext> ngxContext();
+    bool hasDlssRRAvailable() const;
+    bool hasDlssFrameGenerationAvailable() const;
 
     GarbageCollector &gc();
 
@@ -122,6 +127,10 @@ class Framework : public SharedObject<Framework> {
     std::shared_ptr<vk::CommandBuffer> worldAsyncCommandBuffer_;
 
     std::shared_ptr<Pipeline> pipeline_;
+    std::shared_ptr<NgxContext> ngxContext_;
+    std::shared_ptr<DlssFrameGenerationController> dlssFrameGenerationController_;
+    bool dlssRRAvailable_ = false;
+    bool dlssFrameGenerationAvailable_ = false;
 
     std::vector<std::shared_ptr<vk::Semaphore>> commandProcessedSemaphores_;
     std::vector<std::shared_ptr<vk::Fence>> commandFinishedFences_;

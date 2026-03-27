@@ -10,6 +10,7 @@
 #include "core/render/textures.hpp"
 #include "core/render/world.hpp"
 
+#include <filesystem>
 #include <iostream>
 #include <random>
 
@@ -157,6 +158,29 @@ void Framework::init(GLFWwindow *window) {
     asyncCommandPool_ = vk::CommandPool::create(physicalDevice_, device_, physicalDevice_->secondaryQueueIndex());
     gc_ = GarbageCollector::create(shared_from_this());
 
+    if (device_->isDlssDeviceExtensionsCompatible() || device_->isDlssFrameGenerationDeviceExtensionsCompatible()) {
+        std::filesystem::path dlssPath = Renderer::folderPath / "dlss";
+        std::error_code ec;
+        std::filesystem::create_directories(dlssPath, ec);
+        if (ec) {
+            std::cerr << "[Framework] Failed to create DLSS directory: " << ec.message() << std::endl;
+        } else {
+            ngxContext_ = NgxContext::create();
+            NgxContext::NgxInitInfo ngxInitInfo{};
+            ngxInitInfo.instance = instance_;
+            ngxInitInfo.physicalDevice = physicalDevice_;
+            ngxInitInfo.device = device_;
+            ngxInitInfo.applicationPath = dlssPath.string();
+
+            if (NVSDK_NGX_SUCCEED(ngxContext_->init(ngxInitInfo))) {
+                dlssRRAvailable_ = NVSDK_NGX_SUCCEED(ngxContext_->queryDlssRRAvailable());
+                dlssFrameGenerationAvailable_ = NVSDK_NGX_SUCCEED(ngxContext_->queryDlssFGAvailable());
+            } else {
+                ngxContext_ = nullptr;
+            }
+        }
+    }
+
     uint32_t imageCount = swapchain_->imageCount();
 
     // create command buffer for each context
@@ -175,12 +199,20 @@ void Framework::init(GLFWwindow *window) {
     for (int i = 0; i < imageCount; i++) { contexts_.push_back(FrameworkContext::create(shared_from_this(), i)); }
 
     pipeline_ = Pipeline::create(shared_from_this());
+    if (ngxContext_ != nullptr && dlssFrameGenerationAvailable_) {
+        dlssFrameGenerationController_ = DlssFrameGenerationController::create();
+        dlssFrameGenerationController_->init(shared_from_this(), ngxContext_);
+    }
 }
 
 Framework::~Framework() {
 #ifdef DEBUG
     std::cout << "[Framework] framework deconstructed" << std::endl;
 #endif
+}
+
+void Framework::beginShutdown() {
+    running_ = false;
 }
 
 void Framework::acquireContext() {
@@ -306,6 +338,12 @@ void Framework::submitCommand() {
 void Framework::present() {
     if (!running_) return;
 
+    if (dlssFrameGenerationController_ != nullptr) {
+        auto pipelineContext = pipeline_->acquirePipelineContext(currentContext_);
+        if (dlssFrameGenerationController_->present(currentContext_, pipelineContext)) { return; }
+        dlssFrameGenerationController_->advanceBackbufferFrameId();
+    }
+
     VkPresentInfoKHR presentInfo = {};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
@@ -350,6 +388,11 @@ void Framework::recreate() {
     currentContext_ = nullptr;
     contexts_.clear();
 
+    if (dlssFrameGenerationController_ != nullptr) {
+        dlssFrameGenerationController_->destroy();
+        dlssFrameGenerationController_ = nullptr;
+    }
+
     uploadCommandBuffers_.clear();
     overlayCommandBuffers_.clear();
     worldCommandBuffers_.clear();
@@ -380,6 +423,11 @@ void Framework::recreate() {
     pipeline_->recreate(shared_from_this());
 
     Renderer::instance().textures()->bindAllTextures();
+
+    if (ngxContext_ != nullptr && dlssFrameGenerationAvailable_) {
+        dlssFrameGenerationController_ = DlssFrameGenerationController::create();
+        dlssFrameGenerationController_->init(shared_from_this(), ngxContext_);
+    }
 }
 
 void Framework::waitDeviceIdle() {
@@ -396,6 +444,14 @@ void Framework::waitBackendQueueIdle() {
 
 void Framework::close() {
     if (running_) { pipeline_->close(); }
+    if (dlssFrameGenerationController_ != nullptr) {
+        dlssFrameGenerationController_->destroy();
+        dlssFrameGenerationController_ = nullptr;
+    }
+    if (ngxContext_ != nullptr) {
+        ngxContext_->deinit();
+        ngxContext_ = nullptr;
+    }
     running_ = false;
 }
 
@@ -565,6 +621,9 @@ std::shared_ptr<FrameworkContext> Framework::safeAcquireCurrentContext() {
     std::unique_lock<std::recursive_mutex> lck(recreateMtx_);
     // for continous window operation, currentContext_ will always be reset, busy waiting
     while (currentContext_ == nullptr) {
+        if (!running_) {
+            return nullptr;
+        }
         // ensure currentContext_ is not nullptr after seapchain recreation
         acquireContext();
     }
@@ -573,6 +632,18 @@ std::shared_ptr<FrameworkContext> Framework::safeAcquireCurrentContext() {
 
 std::shared_ptr<Pipeline> Framework::pipeline() {
     return pipeline_;
+}
+
+std::shared_ptr<NgxContext> Framework::ngxContext() {
+    return ngxContext_;
+}
+
+bool Framework::hasDlssRRAvailable() const {
+    return dlssRRAvailable_;
+}
+
+bool Framework::hasDlssFrameGenerationAvailable() const {
+    return dlssFrameGenerationAvailable_;
 }
 
 GarbageCollector &Framework::gc() {
