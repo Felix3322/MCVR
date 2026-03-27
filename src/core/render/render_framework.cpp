@@ -34,6 +34,43 @@ bool shouldHotEngageDlssFrameGeneration(bool dlssFrameGenerationAvailable) {
     return world != nullptr && world->shouldRender();
 }
 
+int getDisplayRefreshRate(GLFWwindow *window) {
+    if (window == nullptr) return 0;
+
+    GLFWmonitor *monitor = GLFW_GetWindowMonitor(window);
+    if (monitor == nullptr) monitor = GLFW_GetPrimaryMonitor();
+    if (monitor == nullptr) return 0;
+
+    const GLFWvidmode *mode = GLFW_GetVideoMode(monitor);
+    return mode == nullptr ? 0 : mode->refreshRate;
+}
+
+void applyCurrentReflexSettings(Framework &framework) {
+    if (!StreamlineContext::isReflexAvailable()) return;
+
+    sl::ReflexMode mode = sl::ReflexMode::eOff;
+    if (Renderer::options.reflexEnabled) {
+        mode = Renderer::options.reflexBoost ? sl::ReflexMode::eLowLatencyWithBoost : sl::ReflexMode::eLowLatency;
+    }
+
+    uint32_t frameLimitUs = 0;
+    if (Renderer::options.vrrMode && Renderer::options.reflexEnabled) {
+        auto window = framework.window();
+        int hz = window == nullptr ? 0 : getDisplayRefreshRate(window->window());
+        if (hz > 0) {
+            uint32_t targetFps = (3600u * static_cast<uint32_t>(hz)) / (static_cast<uint32_t>(hz) + 3600u);
+            if (targetFps > 0) frameLimitUs = 1000000u / targetFps;
+        }
+    } else {
+        uint32_t maxFps = Renderer::options.maxFps;
+        if (maxFps > 0 && maxFps < 1000000u) {
+            frameLimitUs = 1000000u / maxFps;
+        }
+    }
+
+    StreamlineContext::setReflexOptions(mode, frameLimitUs);
+}
+
 } // namespace
 
 FrameworkContext::FrameworkContext(std::shared_ptr<Framework> framework, uint32_t frameIndex)
@@ -172,29 +209,6 @@ void Framework::init(GLFWwindow *window) {
     asyncCommandPool_ = vk::CommandPool::create(physicalDevice_, device_, physicalDevice_->secondaryQueueIndex());
     gc_ = GarbageCollector::create(shared_from_this());
 
-    if (device_->isDlssDeviceExtensionsCompatible() || device_->isDlssFrameGenerationDeviceExtensionsCompatible()) {
-        std::filesystem::path dlssPath = Renderer::folderPath / "dlss";
-        std::error_code ec;
-        std::filesystem::create_directories(dlssPath, ec);
-        if (ec) {
-            std::cerr << "[Framework] Failed to create DLSS directory: " << ec.message() << std::endl;
-        } else {
-            ngxContext_ = NgxContext::create();
-            NgxContext::NgxInitInfo ngxInitInfo{};
-            ngxInitInfo.instance = instance_;
-            ngxInitInfo.physicalDevice = physicalDevice_;
-            ngxInitInfo.device = device_;
-            ngxInitInfo.applicationPath = dlssPath.string();
-
-            if (NVSDK_NGX_SUCCEED(ngxContext_->init(ngxInitInfo))) {
-                dlssRRAvailable_ = NVSDK_NGX_SUCCEED(ngxContext_->queryDlssRRAvailable());
-                dlssFrameGenerationAvailable_ = NVSDK_NGX_SUCCEED(ngxContext_->queryDlssFGAvailable());
-            } else {
-                ngxContext_ = nullptr;
-            }
-        }
-    }
-
     uint32_t imageCount = swapchain_->imageCount();
 
     // create command buffer for each context
@@ -213,10 +227,8 @@ void Framework::init(GLFWwindow *window) {
     for (int i = 0; i < imageCount; i++) { contexts_.push_back(FrameworkContext::create(shared_from_this(), i)); }
 
     pipeline_ = Pipeline::create(shared_from_this());
-    if (ngxContext_ != nullptr && dlssFrameGenerationAvailable_) {
-        dlssFrameGenerationController_ = DlssFrameGenerationController::create();
-        dlssFrameGenerationController_->init(shared_from_this(), ngxContext_);
-    }
+    refreshNgxContext();
+    applyCurrentReflexSettings(*this);
 }
 
 Framework::~Framework() {
@@ -698,6 +710,55 @@ std::shared_ptr<Pipeline> Framework::pipeline() {
 
 std::shared_ptr<NgxContext> Framework::ngxContext() {
     return ngxContext_;
+}
+
+void Framework::refreshNgxContext() {
+    if (dlssFrameGenerationController_ != nullptr) {
+        dlssFrameGenerationController_->destroy();
+        dlssFrameGenerationController_ = nullptr;
+    }
+    if (ngxContext_ != nullptr) {
+        ngxContext_->deinit();
+        ngxContext_ = nullptr;
+    }
+
+    dlssRRAvailable_ = false;
+    dlssFrameGenerationAvailable_ = false;
+
+    if (device_ == nullptr || instance_ == nullptr || physicalDevice_ == nullptr) {
+        return;
+    }
+    if (!device_->isDlssDeviceExtensionsCompatible() && !device_->isDlssFrameGenerationDeviceExtensionsCompatible()) {
+        return;
+    }
+
+    std::filesystem::path dlssPath = Renderer::folderPath / "dlss";
+    std::error_code ec;
+    std::filesystem::create_directories(dlssPath, ec);
+    if (ec) {
+        std::cerr << "[Framework] Failed to create DLSS directory: " << ec.message() << std::endl;
+        return;
+    }
+
+    auto ngxContext = NgxContext::create();
+    NgxContext::NgxInitInfo ngxInitInfo{};
+    ngxInitInfo.instance = instance_;
+    ngxInitInfo.physicalDevice = physicalDevice_;
+    ngxInitInfo.device = device_;
+    ngxInitInfo.applicationPath = dlssPath.string();
+
+    if (NVSDK_NGX_FAILED(ngxContext->init(ngxInitInfo))) {
+        return;
+    }
+
+    ngxContext_ = ngxContext;
+    dlssRRAvailable_ = NVSDK_NGX_SUCCEED(ngxContext_->queryDlssRRAvailable());
+    dlssFrameGenerationAvailable_ = NVSDK_NGX_SUCCEED(ngxContext_->queryDlssFGAvailable());
+
+    if (pipeline_ != nullptr && dlssFrameGenerationAvailable_) {
+        dlssFrameGenerationController_ = DlssFrameGenerationController::create();
+        dlssFrameGenerationController_->init(shared_from_this(), ngxContext_);
+    }
 }
 
 bool Framework::hasDlssRRAvailable() const {

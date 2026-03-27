@@ -355,6 +355,17 @@ void Pipeline::collectWorldModules() {
     // TODO: invoke extension's collection
 }
 
+void Pipeline::recollectWorldModules() {
+    if (Renderer::is_initialized()) {
+        auto framework = Renderer::instance().framework();
+        if (framework != nullptr) {
+            framework->refreshNgxContext();
+        }
+    }
+
+    collectWorldModules();
+}
+
 Pipeline::Pipeline() {
 #ifdef DEBUG
     std::cout << "Pipeline init" << std::endl;

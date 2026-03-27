@@ -101,6 +101,7 @@ class Framework : public SharedObject<Framework> {
 
     std::shared_ptr<Pipeline> pipeline();
     std::shared_ptr<NgxContext> ngxContext();
+    void refreshNgxContext();
     bool hasDlssRRAvailable() const;
     bool hasDlssFrameGenerationAvailable() const;
 
