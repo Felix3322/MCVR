@@ -6,6 +6,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 #include "util/disney.glsl"
+#include "util/environment_fx.glsl"
 #include "util/random.glsl"
 #include "util/ray.glsl"
 #include "util/util.glsl"
@@ -78,6 +79,86 @@ layout(location = 0) rayPayloadInEXT MainRay mainRay;
 layout(location = 1) rayPayloadEXT ShadowRay shadowRay;
 hitAttributeEXT vec2 attribs;
 
+float sampleCloudShadow(vec3 sampleWorldPos,
+                        float localY,
+                        vec3 sunDir,
+                        float gameTime,
+                        float cloudMode) {
+    float realism = clamp((cloudMode - CLOUD_MODE_EFFICIENT)
+        / max(CLOUD_MODE_REALISTIC - CLOUD_MODE_EFFICIENT, 1.0), 0.0, 1.0);
+    int lightSteps = realism > 0.5 ? 6 : 3;
+    float occlusion = 0.0;
+    for (int i = 0; i < 6; i++) {
+        if (i >= lightSteps) {
+            break;
+        }
+        float t = (float(i) + 1.0) * mix(1.0, 1.35, realism);
+        vec3 lightSamplePos = sampleWorldPos + sunDir * t;
+        float lightSampleY = localY + sunDir.y * t;
+        occlusion += sampleCloudDensity(lightSamplePos, lightSampleY, gameTime, cloudMode);
+    }
+    return exp(-occlusion * mix(0.95, 1.3, realism));
+}
+
+vec3 renderVolumetricCloud(vec3 worldPos,
+                           vec3 localPos,
+                           vec3 normal,
+                           vec3 viewDir,
+                           vec3 sunDir,
+                           vec3 tint,
+                           vec3 skyAmbient,
+                           float rainGradient,
+                           float gameTime,
+                           float cloudMode) {
+    float realism = clamp((cloudMode - CLOUD_MODE_EFFICIENT)
+        / max(CLOUD_MODE_REALISTIC - CLOUD_MODE_EFFICIENT, 1.0), 0.0, 1.0);
+    vec3 inwardDir = dot(normal, viewDir) > 0.0 ? -normal : normal;
+    inwardDir = normalize(inwardDir);
+
+    int marchSteps = realism > 0.5 ? 9 : 5;
+    float stepLength = mix(0.7, 0.52, realism);
+    float transmittance = 1.0;
+    float accumulatedDensity = 0.0;
+    float accumulatedLight = 0.0;
+    for (int i = 0; i < 9; i++) {
+        if (i >= marchSteps) {
+            break;
+        }
+        float t = (float(i) + 0.5) * stepLength;
+        vec3 samplePos = worldPos + inwardDir * t;
+        float sampleY = localPos.y + inwardDir.y * t;
+        float density = sampleCloudDensity(samplePos, sampleY, gameTime, cloudMode);
+        if (density <= 1e-4) {
+            continue;
+        }
+
+        float shadow = sampleCloudShadow(samplePos, sampleY, sunDir, gameTime, cloudMode);
+        float forwardPhase = pow(max(dot(viewDir, sunDir), 0.0), mix(6.0, 14.0, realism));
+        float silverLining = pow(max(dot(-inwardDir, sunDir), 0.0), mix(8.0, 18.0, realism));
+        float localLight = shadow * mix(0.52, 0.82, realism)
+            + forwardPhase * mix(0.08, 0.18, realism)
+            + silverLining * mix(0.18, 0.42, realism);
+
+        accumulatedLight += density * transmittance * localLight;
+        accumulatedDensity += density * transmittance;
+        transmittance *= exp(-density * mix(0.95, 1.25, realism));
+        if (transmittance < 0.02) {
+            break;
+        }
+    }
+
+    float opacity = clamp(1.0 - transmittance, 0.0, 1.0);
+    float dayFactor = smoothstep(-0.3, 0.35, sunDir.y);
+    vec3 ambient = tint * skyAmbient * mix(0.18, 0.32, realism) * max(opacity, accumulatedDensity * 0.42);
+    vec3 direct = tint * accumulatedLight * mix(0.75, 1.08, realism);
+    vec3 silver = mix(vec3(0.0), vec3(1.0, 0.97, 0.92), dayFactor)
+        * pow(max(dot(viewDir, -sunDir), 0.0), mix(10.0, 22.0, realism))
+        * opacity * mix(0.16, 0.36, realism);
+    vec3 rainyLift = mix(skyAmbient * 0.08, vec3(0.1, 0.11, 0.12) * opacity, 0.55);
+    vec3 litCloud = ambient + direct + silver;
+    return mix(litCloud, rainyLift + ambient * 0.85, rainGradient);
+}
+
 void main() {
     vec3 viewDir = -mainRay.direction;
 
@@ -135,45 +216,54 @@ void main() {
     mat.ior = 1.5;
     mat.emission = 0.0;
 
+    vec3 sunDir = normalize(skyUBO.sunDirection);
+    float progress = skyUBO.rainGradient;
+    vec3 skyAmbient = texture(skyFull, normalize(viewDir)).rgb;
+    if (sunDir.y < 0) {
+        sunDir = -sunDir;
+    }
+
     mainRay.hitT = gl_HitTEXT;
 
-    vec3 rayOrigin = worldPos;
+    float cloudMode = skyUBO.pad1;
+    if (cloudMode <= CLOUD_MODE_NATIVE + 0.25) {
+        vec3 rayOrigin = worldPos;
+        vec3 sampledLightDir = sunDir;
 
-    // shadow ray for direct lighting
-    vec3 sunDir = normalize(skyUBO.sunDirection);
-    vec3 sampledLightDir = sunDir;
-    if (sampledLightDir.y < 0) { sampledLightDir = -sampledLightDir; }
+        // Clouds are mostly viewed from below; keep underside lit via two-sided + backlit response.
+        float ndotl = dot(normal, sampledLightDir);
+        float ndotv = dot(normal, viewDir);
+        float frontLit = max(ndotl, 0.0);
+        float wrappedLit = clamp((abs(ndotl) + 0.4) / 1.4, 0.0, 1.0);
+        float backLit = max(-ndotl, 0.0) * max(-ndotv, 0.0);
+        float cloudPhase = max(frontLit, max(wrappedLit * 0.6, backLit * 1.35));
+        vec3 lightBRDF = tint * (INV_PI * cloudPhase);
 
-    // Clouds are mostly viewed from below; keep underside lit via two-sided + backlit response.
-    float ndotl = dot(normal, sampledLightDir);
-    float ndotv = dot(normal, viewDir);
-    float frontLit = max(ndotl, 0.0);
-    float wrappedLit = clamp((abs(ndotl) + 0.4) / 1.4, 0.0, 1.0);
-    float backLit = max(-ndotl, 0.0) * max(-ndotv, 0.0);
-    float cloudPhase = max(frontLit, max(wrappedLit * 0.6, backLit * 1.35));
-    vec3 lightBRDF = tint * (INV_PI * cloudPhase);
+        shadowRay.radiance = vec3(0.0);
+        shadowRay.throughput = vec3(1.0);
+        shadowRay.bounceIndex = rayBounce(mainRay);
+        traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT,
+                    WORLD_MASK, // masks
+                    0,          // sbtRecordOffset
+                    0,          // sbtRecordStride
+                    0,          // missIndex
+                    rayOrigin, 0.001, sampledLightDir, 1000, 1);
 
-    shadowRay.radiance = vec3(0.0);
-    shadowRay.throughput = vec3(1.0);
-    shadowRay.bounceIndex = rayBounce(mainRay);
-    traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT,
-                WORLD_MASK, // masks
-                0,          // sbtRecordOffset
-                0,          // sbtRecordStride
-                0,          // missIndex
-                rayOrigin, 0.001, sampledLightDir, 1000, 1);
+        vec3 lightContribution = shadowRay.radiance;
+        vec3 lightRadiance = lightContribution * mainRay.throughput * lightBRDF;
+        lightRadiance *= alpha * 0.65;
 
-    vec3 lightContribution = shadowRay.radiance;
-
-    float progress = skyUBO.rainGradient;
-    vec3 lightRadiance = lightContribution * mainRay.throughput * lightBRDF;
-    lightRadiance *= alpha * 0.65;
-    
-    float dayFactor = smoothstep(-0.3, 0.3, sunDir.y);
-    vec3 skyAmbient = texture(skyFull, normalize(viewDir)).rgb;
-    vec3 rainyRadiance = mix(skyAmbient * 0.12, vec3(0.08), dayFactor);
-    vec3 wetCloudRadiance = lightRadiance * mix(0.2, 0.35, dayFactor) + rainyRadiance;
-    mainRay.radiance += mix(lightRadiance, wetCloudRadiance, progress);
+        float dayFactor = smoothstep(-0.3, 0.3, sunDir.y);
+        vec3 rainyRadiance = mix(skyAmbient * 0.12, vec3(0.08), dayFactor);
+        vec3 wetCloudRadiance = lightRadiance * mix(0.2, 0.35, dayFactor) + rainyRadiance;
+        mainRay.radiance += mix(lightRadiance, wetCloudRadiance, progress);
+    } else {
+        vec3 localPos = baryCoords.x * v0.pos + baryCoords.y * v1.pos + baryCoords.z * v2.pos;
+        vec3 volumetricRadiance =
+            renderVolumetricCloud(worldPos, localPos, normal, viewDir, sunDir, tint, skyAmbient,
+                progress, worldUbo.gameTime, cloudMode);
+        mainRay.radiance += volumetricRadiance * alpha;
+    }
 
     mainRay.hitT = gl_HitTEXT;
     mainRay.normal = vec3(0.0);
