@@ -6,6 +6,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 #include "util/disney.glsl"
+#include "util/environment_fx.glsl"
 #include "util/alpha_mode.glsl"
 #include "util/random.glsl"
 #include "util/ray_cone.glsl"
@@ -127,10 +128,13 @@ void main() {
     float farFieldPbrBias = farFieldPbrDetailLodBias(worldPos, pc.farFieldStartDistanceChunks);
     uint coordinate = v0.coordinate;
     vec3 normal = baryCoords.x * v0.norm + baryCoords.y * v1.norm + baryCoords.z * v2.norm;
+    vec3 geoNormal = normalize(cross(v1.pos - v0.pos, v2.pos - v0.pos));
     if (coordinate == 1) {
         normal = normalize(mat3(worldUbo.cameraViewMatInv) * normal);
+        geoNormal = normalize(mat3(worldUbo.cameraViewMatInv) * geoNormal);
     } else {
         normal = normalize(normal);
+        geoNormal = normalize(geoNormal);
     }
 
     uint useColorLayer = v0.useColorLayer;
@@ -145,6 +149,7 @@ void main() {
     uint useTexture = v0.useTexture;
     float albedoEmission =
         baryCoords.x * v0.albedoEmission + baryCoords.y * v1.albedoEmission + baryCoords.z * v2.albedoEmission;
+    bool taggedWaterSurface = decodeWaterSurfaceSentinel(albedoEmission);
     uint textureID = v0.textureID;
     bool forceNoPbrMaterial = (v0.alphaMode & 0x100u) != 0u;
     uint alphaMode = v0.alphaMode & 0xFu;
@@ -216,6 +221,21 @@ void main() {
         mat.transmission = 0.0;
         mat.f0 = vec3(0.04);
         mat.emission = 0.0;
+    }
+    if (taggedWaterSurface) {
+        float sparkleMix = step(0.5, skyUBO.pad0);
+        normal = applyWaterSurfaceNormal(normal, geoNormal, worldPos, worldUbo.gameTime, skyUBO.pad0);
+        mat.roughness = mix(0.09, 0.03, sparkleMix);
+        mat.metallic = 0.0;
+        mat.transmission = mix(0.78, 0.9, sparkleMix);
+        mat.ior = 1.333;
+        mat.f0 = mix(vec3(0.025), vec3(0.04), sparkleMix);
+        mat.emission = 0.0;
+        albedoValue.a = max(albedoValue.a, 0.72);
+        albedoValue.rgb = mix(albedoValue.rgb,
+            mix(vec3(0.0, 0.17, 0.23), vec3(0.0, 0.24, 0.31), sparkleMix),
+            mix(0.08, 0.15, sparkleMix));
+        tint = albedoValue.rgb;
     }
 
     // add glowing radiance

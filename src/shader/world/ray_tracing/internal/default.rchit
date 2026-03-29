@@ -7,6 +7,7 @@
 
 #include "common/shared.hpp"
 #include "util/disney.glsl"
+#include "util/environment_fx.glsl"
 #include "util/alpha_mode.glsl"
 #include "util/random.glsl"
 #include "util/ray_cone.glsl"
@@ -176,6 +177,7 @@ void main() {
 
     float albedoEmission =
         baryCoords.x * m0.albedoEmission + baryCoords.y * m1.albedoEmission + baryCoords.z * m2.albedoEmission;
+    bool taggedWaterSurface = decodeWaterSurfaceSentinel(albedoEmission);
     uint textureID = m0.textureID;
     uint alphaMode = getAlphaMode(packedData);
 
@@ -262,6 +264,20 @@ void main() {
     vec3 geoNormal;
     vec3 normal =
         calculateNormal(p0.pos, p1.pos, p2.pos, m0.textureUV, m1.textureUV, m2.textureUV, mat.normal, viewDir, geoNormal);
+    if (taggedWaterSurface) {
+        float sparkleMix = step(0.5, skyUBO.pad0);
+        normal = applyWaterSurfaceNormal(normal, geoNormal, worldPos, worldUbo.gameTime, skyUBO.pad0);
+        mat.roughness = mix(0.075, 0.018, sparkleMix);
+        mat.metallic = 0.0;
+        mat.transmission = mix(0.82, 0.95, sparkleMix);
+        mat.ior = 1.333;
+        mat.f0 = mix(vec3(0.03), vec3(0.05), sparkleMix);
+        mat.emission = 0.0;
+        albedoValue.a = max(albedoValue.a, 0.72);
+        albedoValue.rgb = mix(albedoValue.rgb, mix(vec3(0.0, 0.18, 0.24), vec3(0.0, 0.26, 0.33), sparkleMix),
+            mix(0.1, 0.18, sparkleMix));
+        tint = albedoValue.rgb;
+    }
 
     float factor = bounce == 0u ? pc.directLightStrength : pc.indirectLightStrength;
     vec3 emissionRadiance = factor * tint * mat.emission * mainRay.throughput;
