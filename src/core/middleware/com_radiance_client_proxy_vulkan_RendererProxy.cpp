@@ -109,6 +109,18 @@ static std::filesystem::path JStringToPath(JNIEnv* env, jstring jstr) {
     return std::filesystem::path(u16);
 }
 
+static Renderer *try_renderer() {
+    return Renderer::try_instance();
+}
+
+static std::shared_ptr<Framework> try_framework() {
+    auto *renderer = try_renderer();
+    if (renderer == nullptr) return nullptr;
+    auto framework = renderer->framework();
+    if (framework == nullptr || !framework->isRunning()) return nullptr;
+    return framework;
+}
+
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_initFolderPath(JNIEnv *env,
                                                                                           jclass,
                                                                                           jstring folderPath) {
@@ -136,41 +148,50 @@ JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_initR
 }
 
 JNIEXPORT jint JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_maxSupportedTextureSize(JNIEnv *, jclass) {
-    auto maxImageSize = Renderer::instance().framework()->physicalDevice()->properties().limits.maxImageDimension2D;
+    auto framework = try_framework();
+    if (framework == nullptr) return 0;
+    auto maxImageSize = framework->physicalDevice()->properties().limits.maxImageDimension2D;
     return maxImageSize;
 }
 
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_acquireContext(JNIEnv *, jclass) {
-    auto framework = Renderer::instance().framework();
+    auto framework = try_framework();
     if (framework == nullptr) return;
     framework->acquireContext();
 }
 
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_submitCommand(JNIEnv *, jclass) {
-    auto framework = Renderer::instance().framework();
+    auto framework = try_framework();
     if (framework == nullptr) return;
     framework->submitCommand();
 }
 
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_present(JNIEnv *, jclass) {
-    auto framework = Renderer::instance().framework();
+    auto framework = try_framework();
     if (framework == nullptr) return;
     framework->present();
 }
 
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_beginShutdownNative(JNIEnv *, jclass) {
-    auto framework = Renderer::instance().framework();
+    auto *renderer = try_renderer();
+    if (renderer == nullptr) return;
+    auto framework = renderer->framework();
     if (framework == nullptr) return;
     framework->beginShutdown();
 }
 
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_drawOverlay(
     JNIEnv *, jclass, jint vertexId, jint indexId, jint pipelineType, jint indexCount, jint indexType) {
-    auto framework = Renderer::instance().framework();
+    auto *renderer = try_renderer();
+    if (renderer == nullptr) return;
+    auto framework = try_framework();
     if (framework == nullptr) return;
-    auto vertexBuffer = Renderer::instance().buffers()->getBuffer(vertexId);
-    auto indexBuffer = Renderer::instance().buffers()->getBuffer(indexId);
+    auto buffers = renderer->buffers();
+    if (buffers == nullptr) return;
+    auto vertexBuffer = buffers->getBuffer(vertexId);
+    auto indexBuffer = buffers->getBuffer(indexId);
     auto context = framework->safeAcquireCurrentContext();
+    if (context == nullptr) return;
     auto pipelineContext = framework->pipeline()->acquirePipelineContext(context);
     pipelineContext->uiModuleContext->drawIndexed(vertexBuffer, indexBuffer,
                                                   static_cast<OverlayDrawPipelineType>(pipelineType), indexCount,
@@ -178,39 +199,45 @@ JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_drawO
 }
 
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_fuseWorld(JNIEnv *, jclass) {
-    auto framework = Renderer::instance().framework();
+    auto framework = try_framework();
     if (framework == nullptr) return;
     auto context = framework->safeAcquireCurrentContext();
+    if (context == nullptr) return;
     auto pipelineContext = framework->pipeline()->acquirePipelineContext(context);
     pipelineContext->fuseWorld();
 }
 
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_postBlur(JNIEnv *, jclass) {
-    auto framework = Renderer::instance().framework();
+    auto *renderer = try_renderer();
+    if (renderer == nullptr) return;
+    auto framework = try_framework();
     if (framework == nullptr) return;
-    auto world = Renderer::instance().world();
+    auto world = renderer->world();
     if (world != nullptr && world->shouldRender()) return;
     auto context = framework->safeAcquireCurrentContext();
+    if (context == nullptr) return;
     auto pipelineContext = framework->pipeline()->acquirePipelineContext(context);
     pipelineContext->uiModuleContext->postBlur(6);
 }
 
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_close(JNIEnv *, jclass) {
-    auto framework = Renderer::instance().framework();
-    if (framework == nullptr) return;
-    Renderer::instance().close();
+    auto *renderer = try_renderer();
+    if (renderer == nullptr) return;
+    renderer->close();
 }
 
 JNIEXPORT void JNICALL
 Java_com_radiance_client_proxy_vulkan_RendererProxy_shouldRenderWorld(JNIEnv *, jclass, jboolean shouldRenderWorld) {
-    auto world = Renderer::instance().world();
+    auto *renderer = try_renderer();
+    if (renderer == nullptr) return;
+    auto world = renderer->world();
     if (world == nullptr) return;
     world->shouldRender() = shouldRenderWorld;
 }
 
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_takeScreenshot(
     JNIEnv *, jclass, jboolean withUI, jint width, jint height, jint channel, jlong pointer) {
-    auto framework = Renderer::instance().framework();
+    auto framework = try_framework();
     if (framework == nullptr) return;
     framework->takeScreenshot(withUI, width, height, channel, reinterpret_cast<void *>(pointer));
 }

@@ -242,7 +242,7 @@ void Framework::beginShutdown() {
 }
 
 void Framework::acquireContext() {
-    if (!running_) return;
+    if (!running_ || device_ == nullptr || swapchain_ == nullptr || contexts_.empty()) return;
 
     // Streamline: advance frame token and sleep at the very top of the frame.
     // Per NVIDIA QA checklist: "slReflexSleep is called regardless of Reflex Low Latency mode state."
@@ -332,7 +332,7 @@ void Framework::acquireContext() {
 }
 
 void Framework::submitCommand() {
-    if (!running_) return;
+    if (!running_ || device_ == nullptr || pipeline_ == nullptr) return;
 
     // PCL: simulation phase ends, render phase begins.
     StreamlineContext::pclSetMarker(sl::PCLMarker::eSimulationEnd);
@@ -393,7 +393,7 @@ void Framework::submitCommand() {
 }
 
 void Framework::present() {
-    if (!running_) return;
+    if (!running_ || device_ == nullptr || swapchain_ == nullptr || pipeline_ == nullptr) return;
 
     auto context = safeAcquireCurrentContext();
     if (!running_ || context == nullptr || device_ == nullptr || swapchain_ == nullptr || pipeline_ == nullptr ||
